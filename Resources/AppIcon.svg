@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- hackclub/hackban src/app/icon.svg, inset to the macOS icon grid (824pt body on a 1024pt canvas) -->
+  <g transform="translate(100 100) scale(25.75)">
+    <rect width="32" height="32" rx="7.2" fill="#ec3750"/>
+    <rect x="6" y="6" width="8.5" height="18" rx="2" fill="#fff"/>
+    <rect x="17.5" y="6" width="8.5" height="11" rx="2" fill="#fff"/>
+  </g>
+</svg>

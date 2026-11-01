@@ -64,6 +64,7 @@ them for site admins.
 swift run Hackban          # run from source
 ./Scripts/bundle.sh        # build/Hackban.app (ad-hoc signed)
 UNIVERSAL=1 ./Scripts/bundle.sh
+./Scripts/icon.sh          # regenerate Resources/AppIcon.icns from AppIcon.svg (needs librsvg)
 ```
 
 Or open `Package.swift` in Xcode and run the `Hackban` scheme. Notifications and open-at-login need the
