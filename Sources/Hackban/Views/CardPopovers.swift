@@ -123,7 +123,7 @@ struct LabelPicker: View {
     let model: CardModel
     let card: Card
     @State private var q = ""
-    @State private var editing: Label?
+    @State private var editing: HackbanKit.Label?
     @State private var creating = false
 
     var body: some View {
@@ -162,10 +162,10 @@ struct LabelPicker: View {
 
 /// Create or edit a board label (also used from the board menu).
 struct LabelEditor: View {
-    let label: Label?
+    let label: HackbanKit.Label?
     let board: BoardModel?
     let done: () -> Void
-    var onCreate: (Label) -> Void = { _ in }
+    var onCreate: (HackbanKit.Label) -> Void = { _ in }
     @State private var name = ""
     @State private var color: String? = "green"
     @State private var confirmDelete = false
@@ -176,7 +176,7 @@ struct LabelEditor: View {
                 Button { done() } label: { Image(systemName: "chevron.left") }.buttonStyle(.borderless)
                 Text(label == nil ? "Create label" : "Edit label").font(.headline)
             }
-            LabelChip(label: Label(id: "preview", name: name, color: color)).frame(maxWidth: .infinity)
+            LabelChip(label: HackbanKit.Label(id: "preview", name: name, color: color)).frame(maxWidth: .infinity)
             TextField("Title", text: $name).textFieldStyle(.roundedBorder)
             Text("Select a colour").font(.caption.bold()).foregroundStyle(.secondary)
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(44), spacing: 6), count: 5), spacing: 6) {

@@ -110,7 +110,7 @@ private struct BackgroundTab: View {
 
 private struct LabelsTab: View {
     @Bindable var model: BoardModel
-    @State private var editing: Label?
+    @State private var editing: HackbanKit.Label?
     @State private var creating = false
 
     var body: some View {

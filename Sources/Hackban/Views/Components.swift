@@ -36,7 +36,7 @@ struct BoardBackground: View {
 }
 
 struct LabelChip: View {
-    let label: Label
+    let label: HackbanKit.Label
     var compact = false
     @Environment(\.colorScheme) private var scheme
 

@@ -178,7 +178,22 @@ struct CardFront: View {
     @State private var quickEdit = false
 
     var body: some View {
-        let account = model.account
+        cardContent
+            .background(.background, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(hovered ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 1.5))
+            .shadow(color: .black.opacity(0.12), radius: 0.5, y: 1)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .onTapGesture { app.open(card: card.id, in: model.account) }
+            .contextMenu { CardQuickMenu(model: model, card: card) }
+            .popover(isPresented: $quickEdit) { QuickEditPopover(model: model, card: card) }
+            .onReceive(NotificationCenter.default.publisher(for: .hackbanQuickEdit)) { n in
+                if (n.object as? String) == card.id { quickEdit = true }
+            }
+    }
+
+    private var showCheck: Bool { (card.dueComplete && card.due == nil) || (hovered && model.canEdit) }
+
+    private var cardContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             cover
             VStack(alignment: .leading, spacing: 6) {
@@ -186,7 +201,7 @@ struct CardFront: View {
                     FlowLayout(spacing: 4) { ForEach(labels, id: \.labelId) { LabelChip(label: $0.label) } }
                 }
                 HStack(alignment: .top, spacing: 6) {
-                    if card.dueComplete && card.due == nil || (hovered && model.canEdit) {
+                    if showCheck {
                         Button { model.updateCard(card.id, .init(dueComplete: !card.dueComplete)) } label: {
                             Image(systemName: card.dueComplete ? "checkmark.circle.fill" : "circle")
                                 .foregroundStyle(card.dueComplete ? Color(hex: "#1f845a") : .secondary)
@@ -202,16 +217,6 @@ struct CardFront: View {
                 badges
             }
             .padding(8)
-        }
-        .background(.background, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(hovered ? Color.accentColor.opacity(0.6) : .clear, lineWidth: 1.5))
-        .shadow(color: .black.opacity(0.12), radius: 0.5, y: 1)
-        .contentShape(RoundedRectangle(cornerRadius: 8))
-        .onTapGesture { app.open(card: card.id, in: account) }
-        .contextMenu { CardQuickMenu(model: model, card: card) }
-        .popover(isPresented: $quickEdit) { QuickEditPopover(model: model, card: card) }
-        .onReceive(NotificationCenter.default.publisher(for: .hackbanQuickEdit)) { n in
-            if (n.object as? String) == card.id { quickEdit = true }
         }
     }
 
@@ -234,7 +239,7 @@ struct CardFront: View {
     private var badges: some View {
         let (done, total) = card.checkCounts
         let members = (card.members ?? []).map(\.user)
-        let hasBadges = card.due != nil || card.watching == true || !card.description.isEmpty || card.commentCount > 0 || card.attachmentCount > 0 || total > 0 || card.isBlocked || card.isBlocking || !members.isEmpty
+        let hasBadges: Bool = hasAnyBadge(total: total, members: members)
         if hasBadges {
             FlowLayout(spacing: 6) {
                 if card.isBlocked {
@@ -264,6 +269,14 @@ struct CardFront: View {
             .labelStyle(CompactLabelStyle())
             .foregroundStyle(.secondary)
         }
+    }
+}
+
+extension CardFront {
+    func hasAnyBadge(total: Int, members: [User]) -> Bool {
+        if card.due != nil || card.watching == true || !card.description.isEmpty { return true }
+        if card.commentCount > 0 || card.attachmentCount > 0 || total > 0 { return true }
+        return card.isBlocked || card.isBlocking || !members.isEmpty
     }
 }
 

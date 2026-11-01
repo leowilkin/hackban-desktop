@@ -1,3 +1,4 @@
+import AppKit
 import HackbanKit
 import ServiceManagement
 import SwiftUI
