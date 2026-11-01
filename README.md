@@ -97,9 +97,8 @@ swift test
 
 ## Server support
 
-Native app sign-in needs a Hackban server change, included here as
-[docs/hackban-server-app-scope.patch](docs/hackban-server-app-scope.patch) (apply it to
-[hackclub/hackban](https://github.com/hackclub/hackban) with `git am`): an `app` OAuth scope whose tokens work on tRPC and the
+Native app sign-in needs a Hackban server change,
+[hackclub/hackban#2](https://github.com/hackclub/hackban/pull/2): an `app` OAuth scope whose tokens work on tRPC and the
 file routes, issued only to native redirect URIs (custom scheme or loopback), with a consent page that says
 the app gets full access. Site-admin powers stay browser-only. Servers without it show "This Hackban server
 doesn't support the Mac app yet" when you try to sign in.
