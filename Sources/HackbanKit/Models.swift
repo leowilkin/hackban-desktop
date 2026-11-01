@@ -73,12 +73,24 @@ public struct CardLabel: Codable, Hashable, Sendable {
     public var cardId: String?
     public let labelId: String
     public var label: Label
+
+    public init(cardId: String?, labelId: String, label: Label) {
+        self.cardId = cardId
+        self.labelId = labelId
+        self.label = label
+    }
 }
 
 public struct CardMember: Codable, Hashable, Sendable {
     public var cardId: String?
     public let userId: String
     public var user: User
+
+    public init(cardId: String?, userId: String, user: User) {
+        self.cardId = cardId
+        self.userId = userId
+        self.user = user
+    }
 }
 
 public struct CardCounts: Codable, Hashable, Sendable {

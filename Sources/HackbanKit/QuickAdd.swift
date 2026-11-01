@@ -53,6 +53,12 @@ public enum QuickAddParser {
         public var labelIds: [String] = []
         public var due: Date?
         public var tokens: [Token] = []
+
+        public init(title: String, boardKey: String? = nil, listId: String? = nil) {
+            self.title = title
+            self.boardKey = boardKey
+            self.listId = listId
+        }
     }
 
     /// - Parameters:
