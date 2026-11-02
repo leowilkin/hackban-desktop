@@ -6,9 +6,10 @@ once.
 
 ## Features
 
-- **Every server at once.** The sidebar lists each account's starred boards, workspaces and guest boards
-  together. Home, My Cards, Notifications, Search and ⌘K (go to board) cover every account, each item tagged
-  with its account. Accounts can be renamed, recoloured, reordered, hidden or signed out in Settings.
+- **Every server at once.** The sidebar has a section per workspace on every account, plus starred and guest
+  boards. Home, My Cards and Notifications cover every account, each item tagged with its account, and Search
+  (⌘K) is a floating panel that finds boards and cards on all of them. Accounts can be renamed, recoloured,
+  reordered, hidden or signed out in Settings.
 - **Boards** as on the web: drag and drop cards and lists, add/rename/colour/copy/move/archive/delete lists,
   move or archive all cards in a list, sort a list, filters (keyword, members, labels, due), star, visibility,
   live updates from other people, share (members, roles, email invites, invite links), and the board menu
