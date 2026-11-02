@@ -38,10 +38,24 @@ struct BoardBackground: View {
 struct LabelChip: View {
     let label: HackbanKit.Label
     var compact = false
+    /// Draw a label with no name as a block, for pickers where it has to be easy to hit. Elsewhere it's a slim bar,
+    /// as on Trello's cards; an empty chip read as a stray button.
+    var swatch = false
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let style = Palette.label(label.color, dark: scheme == .dark)
+        if label.name.isEmpty && !swatch && !compact {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(style.map { Color(hex: $0.background) } ?? Color.secondary.opacity(0.3))
+                .frame(width: 32, height: 8)
+                .help(label.color ?? "No colour")
+        } else {
+            chip(style)
+        }
+    }
+
+    private func chip(_ style: Palette.LabelStyle?) -> some View {
         Text(label.name.isEmpty && !compact ? " " : label.name)
             .font(.caption.weight(.semibold))
             .lineLimit(1)
@@ -172,6 +186,133 @@ struct AccountTag: View {
                 .background(account.color.opacity(0.18), in: Capsule())
                 .foregroundStyle(account.color)
         }
+    }
+}
+
+/// Hackban's logo in colour (hackclub/hackban src/app/icon.svg): the red rounded square with its two white columns.
+struct HackbanMark: View {
+    var size: CGFloat = 20
+
+    var body: some View {
+        let s = size / 32  // the SVG's 32pt grid
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 7.2 * s).fill(Color.hackClubRed)
+            RoundedRectangle(cornerRadius: 2 * s).fill(.white).frame(width: 8.5 * s, height: 18 * s).offset(x: 6 * s, y: 6 * s)
+            RoundedRectangle(cornerRadius: 2 * s).fill(.white).frame(width: 8.5 * s, height: 11 * s).offset(x: 17.5 * s, y: 6 * s)
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Filter tabs in the style of Linear's: capsules, the selected one filled, the rest outlined.
+struct PillTabs<Value: Hashable>: View {
+    @Binding var selection: Value
+    let options: [(value: Value, title: String)]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(options.indices, id: \.self) { i in
+                let o = options[i], on = selection == o.value
+                Button { selection = o.value } label: {
+                    Text(o.title)
+                        .foregroundStyle(on ? .primary : .secondary)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 4)
+                        .background(on ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear), in: Capsule())
+                        .overlay { if !on { Capsule().strokeBorder(.separator) } }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+    }
+}
+
+/// A big title at the top of a page, as Todoist and Reminders have, with a count underneath.
+struct PageTitle: View {
+    let title: String
+    var detail: String?
+    var icon = "checkmark.circle"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.largeTitle.bold())
+            if let detail { Label(detail, systemImage: icon).foregroundStyle(.secondary) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+    }
+}
+
+extension View {
+    /// Drops the toolbar's title on pages that draw their own big one. macOS 14 can't, so it keeps both.
+    @ViewBuilder
+    func hidingToolbarTitle() -> some View {
+        if #available(macOS 15, *) { toolbar(removing: .title) } else { self }
+    }
+}
+
+/// A group heading in a list, as in Todoist: bold, with a count, a chevron in the margin to fold it, and a rule
+/// underneath. Pinned while its rows scroll.
+struct GroupHeader: View {
+    let title: String
+    let count: Int
+    @Binding var collapsed: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Button { collapsed.toggle() } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .rotationEffect(.degrees(collapsed ? -90 : 0))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(collapsed ? "Show" : "Hide")
+                Text(title).fontWeight(.semibold)
+                Text("\(count)").monospacedDigit().foregroundStyle(.secondary).padding(.leading, 8)
+                Spacer()
+            }
+            .padding(.leading, 4)
+            .padding(.top, 14)
+            .padding(.bottom, 6)
+            Divider().padding(.horizontal, 24)
+        }
+        .background(.background)
+    }
+}
+
+/// Linear-style row chrome: full width, a faint highlight on hover, and the whole row clickable. Rows are drawn in a
+/// stack rather than a List, whose fixed row heights clipped anything taller than one line.
+struct ListRowStyle: ViewModifier {
+    let action: () -> Void
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 24)
+            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+            .background(hovering ? Color.primary.opacity(0.05) : .clear)
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .onTapGesture(perform: action)
+    }
+}
+
+/// The strip of filter tabs at the top of a page, above its list.
+struct FilterBar<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: 8) { content; Spacer() }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 10)
     }
 }
 

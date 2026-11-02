@@ -243,7 +243,7 @@ struct FilterPopover: View {
                 Text("Labels").font(.caption.bold()).foregroundStyle(.secondary)
                 toggle("No labels", key: "none", set: \.labels)
                 ForEach(board?.labels ?? []) { l in
-                    toggle(l.name, key: l.id, set: \.labels) { LabelChip(label: l) }
+                    toggle(l.name, key: l.id, set: \.labels) { LabelChip(label: l, swatch: true) }
                 }
                 if model.filters.isActive {
                     Button("Clear filters (x)") { model.filters = CardFilters() }

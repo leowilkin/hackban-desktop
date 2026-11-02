@@ -3,45 +3,19 @@ import HackbanKit
 import Observation
 import SwiftUI
 
-/// A floating, Spotlight-style panel that takes key input without bringing the main window forward.
-final class QuickAddPanel: NSPanel {
+/// A floating, Spotlight-style panel that takes key input without bringing the main window forward. Quick add and
+/// search both use one.
+final class FloatingPanel: NSPanel {
+    var onCancel: () -> Void = {}
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    override func cancelOperation(_ sender: Any?) {
-        MainActor.assumeIsolated { QuickAddController.shared.hide() }
-    }
-}
+    override func cancelOperation(_ sender: Any?) { onCancel() }
 
-@MainActor
-final class QuickAddController: NSObject, NSWindowDelegate {
-    static let shared = QuickAddController()
-    private var panel: QuickAddPanel?
-    private let state = QuickAddState()
-
-    func toggle() {
-        if panel?.isVisible == true { hide() } else { show() }
-    }
-
-    func show() {
-        let p = panel ?? makePanel()
-        panel = p
-        state.prepare(app: AppModel.shared)
-        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
-        if let f = screen?.visibleFrame {
-            p.setFrameOrigin(NSPoint(x: f.midX - p.frame.width / 2, y: f.maxY - f.height * 0.28 - p.frame.height))
-        }
-        p.makeKeyAndOrderFront(nil)
-        state.focusToken += 1
-    }
-
-    func hide() {
-        panel?.orderOut(nil)
-    }
-
-    private func makePanel() -> QuickAddPanel {
-        let p = QuickAddPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 170),
+    static func make<Content: View>(width: CGFloat, height: CGFloat, delegate: NSWindowDelegate, content: Content) -> FloatingPanel {
+        let p = FloatingPanel(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView],
             backing: .buffered,
             defer: true
@@ -55,11 +29,49 @@ final class QuickAddController: NSObject, NSWindowDelegate {
         p.isReleasedWhenClosed = false
         p.becomesKeyOnlyIfNeeded = false
         p.backgroundColor = .clear
-        p.delegate = self
+        p.delegate = delegate
         for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] { p.standardWindowButton(b)?.isHidden = true }
-        let host = NSHostingView(rootView: QuickAddView(state: state).environment(AppModel.shared))
+        let host = NSHostingView(rootView: content)
         host.sizingOptions = [.preferredContentSize]
         p.contentView = host
+        return p
+    }
+
+    /// Centred on the screen with the mouse, a little above the middle, like Spotlight.
+    func present() {
+        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
+        if let f = screen?.visibleFrame {
+            setFrameOrigin(NSPoint(x: f.midX - frame.width / 2, y: f.maxY - f.height * 0.28 - frame.height))
+        }
+        makeKeyAndOrderFront(nil)
+    }
+}
+
+@MainActor
+final class QuickAddController: NSObject, NSWindowDelegate {
+    static let shared = QuickAddController()
+    private var panel: FloatingPanel?
+    private let state = QuickAddState()
+
+    func toggle() {
+        if panel?.isVisible == true { hide() } else { show() }
+    }
+
+    func show() {
+        let p = panel ?? makePanel()
+        panel = p
+        state.prepare(app: AppModel.shared)
+        p.present()
+        state.focusToken += 1
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
+    }
+
+    private func makePanel() -> FloatingPanel {
+        let p = FloatingPanel.make(width: 620, height: 320, delegate: self, content: QuickAddView(state: state).environment(AppModel.shared))
+        p.onCancel = { QuickAddController.shared.hide() }
         return p
     }
 
@@ -235,55 +247,74 @@ struct QuickAddView: View {
     var body: some View {
         let r = state.result
         let options = state.options
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: "plus.rectangle.on.rectangle").foregroundStyle(Color.hackClubRed).font(.title2)
-                TextField("Add a card… e.g. Write post #Marketing @me !urgent tomorrow 5pm", text: $state.text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.title3)
-                    .lineLimit(1...4)
-                    .focused($focused)
-                    .onSubmit { submit(open: false) }
-                    .onKeyPress(.return, phases: .down) { press in
-                        if press.modifiers.contains(.command) { submit(open: true); return .handled }
-                        if press.modifiers.contains(.shift) { return .ignored }
-                        submit(open: false)
-                        return .handled
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
+                    TextField("Add a card…", text: $state.text, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(.title2)
+                        .lineLimit(1...4)
+                        .focused($focused)
+                        .onSubmit { submit(open: false) }
+                        .onKeyPress(.return, phases: .down) { press in
+                            if press.modifiers.contains(.command) { submit(open: true); return .handled }
+                            if press.modifiers.contains(.shift) { return .ignored }
+                            submit(open: false)
+                            return .handled
+                        }
+                    if state.busy { ProgressView().controlSize(.small).frame(height: 22) }
+                }
+                tokens(r)
+                if let e = state.error {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                        Text(e)
                     }
-            }
-            if !r.tokens.isEmpty || r.title != state.text.trimmingCharacters(in: .whitespacesAndNewlines) {
-                FlowLayout(spacing: 6) {
-                    ForEach(Array(r.tokens.enumerated()), id: \.offset) { _, t in chip(t) }
+                    .font(.callout)
+                    .foregroundStyle(.red)
                 }
             }
-            HStack(spacing: 8) {
-                Picker("", selection: $state.boardKey) {
-                    ForEach(options) { o in
-                        Text(app.accounts.count > 1 ? "\(o.board.name) · \(o.accountLabel)" : o.board.name).tag(o.key)
-                    }
+            .padding(16)
+            Divider()
+            HStack(spacing: 6) {
+                if options.isEmpty {
+                    Text("Sign in to a Hackban server first (Settings → Accounts).").font(.callout).foregroundStyle(.secondary)
+                } else {
+                    destination(r, options)
                 }
-                .labelsHidden()
-                .frame(maxWidth: 240)
-                .disabled(r.boardKey != nil)
-                Picker("", selection: $state.listId) {
-                    ForEach(state.details[state.boardKey]?.lists ?? []) { Text($0.name).tag($0.id) }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 160)
-                .disabled(r.listId != nil)
-                Spacer()
-                if state.busy { ProgressView().controlSize(.small) }
-                Button { showHelp.toggle() } label: { Image(systemName: "questionmark.circle") }
+                Spacer(minLength: 12)
+                Button { showHelp.toggle() } label: { Image(systemName: "questionmark.circle").font(.body) }
                     .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Quick add syntax")
                     .popover(isPresented: $showHelp) { QuickAddHelp() }
-                Text("↩ add  ⌘↩ add & open  ⎋ close").font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 3) {
+                    Text("Add & Open").padding(.trailing, 3)
+                    Keycap(symbol: "command")
+                    Keycap(symbol: "return")
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize()
+                .padding(.leading, 4)
+                .padding(.trailing, 2)
+                Button { submit(open: false) } label: {
+                    HStack(spacing: 6) {
+                        Text("Add")
+                        Image(systemName: "return").font(.caption.weight(.semibold)).opacity(0.7)
+                    }
+                    .padding(.horizontal, 2)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.hackClubRed)
+                .disabled(state.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.busy)
             }
-            if let e = state.error { Text(e).font(.caption).foregroundStyle(.red) }
-            if options.isEmpty { Text("Sign in to a Hackban server first (Settings → Accounts).").font(.caption).foregroundStyle(.secondary) }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
         }
-        .padding(16)
         .frame(width: 620)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .modifier(PanelSurface())
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onChange(of: state.boardKey) { _, k in
             if let lists = state.details[k]?.lists, !lists.contains(where: { $0.id == state.listId }) { state.listId = lists.first?.id ?? "" }
             state.load(k)
@@ -291,6 +322,78 @@ struct QuickAddView: View {
         .onChange(of: r.boardKey) { _, k in if let k { state.load(k) } }
         .onChange(of: state.focusToken) { _, _ in focused = true }
         .onAppear { focused = true }
+    }
+
+    /// What the parser picked out of the text, or a hint at the syntax until it finds something.
+    @ViewBuilder
+    private func tokens(_ r: QuickAddParser.Result) -> some View {
+        let lines = state.text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if !r.tokens.isEmpty || lines.count > 1 {
+            FlowLayout(spacing: 6) {
+                ForEach(Array(r.tokens.enumerated()), id: \.offset) { _, t in chip(t) }
+                if lines.count > 1 { TokenChip(text: "\(lines.count) cards", icon: "square.stack", color: .secondary) }
+            }
+        } else if state.parse {
+            Text("Type \(hint("#board")), \(hint("/list")), \(hint("@me")), \(hint("!label")) or a date like \(hint("tomorrow 5pm"))")
+                .font(.callout)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .frame(height: 22)
+        }
+    }
+
+    private func hint(_ s: String) -> Text { Text(s).foregroundStyle(.secondary) }
+
+    /// Board, then list: Todoist-style pills that open menus. A #board or /list in the text overrides them.
+    private func destination(_ r: QuickAddParser.Result, _ options: [QuickAddState.Option]) -> some View {
+        let board = options.first { $0.key == state.boardKey }
+        let lists = state.details[state.boardKey]?.lists ?? []
+        let list = lists.first { $0.id == state.listId }
+        return HStack(spacing: 4) {
+            Menu {
+                Picker("Board", selection: $state.boardKey) {
+                    ForEach(options) { o in
+                        Text(app.accounts.count > 1 ? "\(o.board.name) · \(o.accountLabel)" : o.board.name).tag(o.key)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                DestinationPill(maxWidth: 190) {
+                    BoardBackground(background: board?.board.background)
+                        .frame(width: 16, height: 12)
+                        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    if app.accounts.count > 1, let board {
+                        Text("\(board.board.name) \(Text("· \(board.accountLabel)").foregroundStyle(.secondary))")
+                    } else {
+                        Text(board?.board.name ?? "Board")
+                    }
+                }
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .disabled(r.boardKey != nil)
+            Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+            Menu {
+                Picker("List", selection: $state.listId) {
+                    ForEach(lists) { Text($0.name).tag($0.id) }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                DestinationPill {
+                    Text(list?.name ?? (state.details[state.boardKey] == nil ? "List" : "No lists"))
+                        .foregroundStyle(list == nil ? .secondary : .primary)
+                }
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .disabled(r.listId != nil || lists.isEmpty)
+        }
     }
 
     private func chip(_ t: QuickAddParser.Token) -> some View {
@@ -303,11 +406,7 @@ struct QuickAddView: View {
             case .due: return ("calendar", .green)
             }
         }()
-        return Label(t.display, systemImage: icon)
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 7).padding(.vertical, 3)
-            .background(color.opacity(0.18), in: Capsule())
-            .foregroundStyle(color)
+        return TokenChip(text: t.display, icon: icon, color: color)
     }
 
     private func submit(open: Bool) {
@@ -318,22 +417,120 @@ struct QuickAddView: View {
     }
 }
 
+/// The panel's surface: Liquid Glass on macOS 26 and later, a material before that. The window server draws the
+/// panel's shadow around whatever isn't transparent, so the glass is clipped to its shape: its own soft shadow would
+/// get a hard outline traced around it.
+private struct PanelSurface: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            content
+                .glassEffect(.regular.tint(Color(nsColor: .windowBackgroundColor).opacity(0.5)), in: .rect(cornerRadius: 22))
+                .clipShape(.rect(cornerRadius: 22))
+        } else {
+            content.background(.regularMaterial, in: .rect(cornerRadius: 14))
+        }
+    }
+}
+
+/// A board or list in the footer: a quiet capsule that brightens on hover.
+private struct DestinationPill<Content: View>: View {
+    var maxWidth: CGFloat = 130
+    @ViewBuilder let content: Content
+    @Environment(\.isEnabled) private var enabled
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            content
+            Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(.tertiary)
+        }
+        .font(.callout.weight(.medium))
+        .lineLimit(1)
+        .padding(.horizontal, 9)
+        .frame(height: 24)
+        .frame(maxWidth: maxWidth)
+        .background(Color.primary.opacity(hovering && enabled ? 0.1 : 0.06), in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+        .opacity(enabled ? 1 : 0.5)
+        .contentShape(Capsule())
+        .onHover { hovering = $0 }
+    }
+}
+
+/// One thing the parser understood, tinted by kind.
+private struct TokenChip: View {
+    let text: String
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon).imageScale(.small)
+            Text(text).lineLimit(1)
+        }
+        .font(.callout.weight(.medium))
+        .padding(.horizontal, 8)
+        .frame(height: 22)
+        .foregroundStyle(color)
+        .background(color.opacity(0.14), in: Capsule())
+        .overlay(Capsule().strokeBorder(color.opacity(0.2)))
+    }
+}
+
+/// A key drawn as a small rounded keycap, for shortcut hints.
+private struct Keycap: View {
+    let symbol: String
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 9, weight: .semibold))
+            .frame(width: 18, height: 18)
+            .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(Color.primary.opacity(0.12)))
+    }
+}
+
 struct QuickAddHelp: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Quick add syntax").font(.headline)
-            Group {
-                Text("**#board** or **#board/list**: pick a board (a prefix is enough)")
-                Text("**/list**: pick a list")
-                Text("**@me**, **@name**: assign members")
-                Text("**!label**: add a label (name or colour)")
-                Text("**today**, **tomorrow 5pm**, **fri**, **next week**, **in 3 days**, **jan 5**: due date")
-                Text("Paste several lines to add one card per line.")
-                Text("Only tokens that match something are used; everything else stays in the title.").foregroundStyle(.secondary)
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 8) {
+                row("#board", "Pick a board, or a list on it with **#board/list**. A prefix is enough.")
+                row("/list", "Pick a list")
+                row("@me", "Assign yourself, or anyone with **@name**")
+                row("!label", "Add a label, by name or colour")
+                row("tomorrow", "Set a due date: **today**, **fri 5pm**, **next week**, **in 3 days**, **jan 5**")
             }
-            .font(.callout)
+            Divider()
+            HStack(spacing: 14) {
+                shortcut(["return"], "Add")
+                shortcut(["command", "return"], "Add & Open")
+                shortcut(["shift", "return"], "New line")
+            }
+            Text("Paste several lines to add one card per line. Only tokens that match something are used; everything else stays in the title.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .font(.callout)
         .padding(14)
-        .frame(width: 380)
+        .frame(width: 380, alignment: .leading)
+    }
+
+    private func row(_ token: String, _ text: LocalizedStringKey) -> some View {
+        GridRow {
+            Text(token)
+                .font(.callout.monospaced().weight(.medium))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            Text(text).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func shortcut(_ keys: [String], _ title: String) -> some View {
+        HStack(spacing: 3) {
+            ForEach(keys, id: \.self) { Keycap(symbol: $0) }
+            Text(title).foregroundStyle(.secondary).padding(.leading, 3)
+        }
     }
 }

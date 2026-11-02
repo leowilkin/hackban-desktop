@@ -145,7 +145,7 @@ private struct LabelsTab: View {
                     } else {
                         ForEach(b.labels) { l in
                             HStack {
-                                LabelChip(label: l).frame(maxWidth: .infinity, alignment: .leading)
+                                LabelChip(label: l, swatch: true).frame(maxWidth: .infinity, alignment: .leading)
                                 Text("\(b.lists.flatMap(\.openCards).filter { $0.labelIds.contains(l.id) }.count) cards").font(.caption).foregroundStyle(.secondary)
                                 if b.canEdit { Button { editing = l } label: { Image(systemName: "pencil") }.buttonStyle(.borderless) }
                             }

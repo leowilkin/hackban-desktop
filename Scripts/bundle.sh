@@ -2,8 +2,13 @@
 # Build Hackban.app from the Swift package: build/Hackban.app
 #   UNIVERSAL=1       build for Apple silicon and Intel
 #   SIGN_IDENTITY=…   codesign identity (default: ad-hoc "-")
+#   BUILD_NUMBER=…    CFBundleVersion, which the updater compares against releases (default 0: a local build,
+#                     which doesn't check for updates on its own)
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+build="${BUILD_NUMBER:-0}"
+[[ "$build" =~ ^[0-9]+$ ]] || { echo "BUILD_NUMBER must be a whole number, not '$build'" >&2; exit 1; }
 
 # swiftc links through clang with --sysroot, which doesn't record the SDK version, so the binary says it was
 # built against the macOS 14 SDK and macOS 26+ runs it in compatibility mode, without Liquid Glass.
@@ -25,6 +30,10 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin" "$app/Contents/MacOS/Hackban"
 cp Resources/Info.plist "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build" "$app/Contents/Info.plist"
+# The accent colour (Hack Club red) only takes from a compiled asset catalog that Info.plist names.
+xcrun actool Resources/Assets.xcassets --compile "$app/Contents/Resources" --platform macosx \
+  --minimum-deployment-target 14.0 --accent-color AccentColor --output-partial-info-plist "$(mktemp)" >/dev/null
 [[ -f Resources/AppIcon.icns ]] && cp Resources/AppIcon.icns "$app/Contents/Resources/" && \
   /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$app/Contents/Info.plist" >/dev/null
 

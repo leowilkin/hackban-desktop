@@ -6,9 +6,10 @@ once.
 
 ## Features
 
-- **Every server at once.** The sidebar lists each account's starred boards, workspaces and guest boards
-  together. Home, My Cards, Notifications, Search and ⌘K (go to board) cover every account, each item tagged
-  with its account. Accounts can be renamed, recoloured, reordered, hidden or signed out in Settings.
+- **Every server at once.** The sidebar has a section per workspace on every account, plus starred and guest
+  boards. Home, My Cards and Notifications cover every account, each item tagged with its account, and Search
+  (⌘K) is a floating panel that finds boards and cards on all of them. Accounts can be renamed, recoloured,
+  reordered, hidden or signed out in Settings.
 - **Boards** as on the web: drag and drop cards and lists, add/rename/colour/copy/move/archive/delete lists,
   move or archive all cards in a list, sort a list, filters (keyword, members, labels, due), star, visibility,
   live updates from other people, share (members, roles, email invites, invite links), and the board menu
@@ -79,7 +80,39 @@ as the SDK version, so macOS shows the pre-26 design. The app is ad-hoc signed, 
 right-click → Open, and macOS may ask once per build to let it read its Keychain item.
 
 CI (`.github/workflows/build.yml`) runs the tests and builds `Hackban.app` on macOS for every push, and
-uploads it as an artifact.
+uploads it as an artifact. Builds of `main` are also published as GitHub releases tagged `build-<run number>`,
+with the run number as the app's `CFBundleVersion` (`BUILD_NUMBER=… ./Scripts/bundle.sh`; local builds are 0).
+
+## Updates
+
+The app checks this repo's latest release (`HackbanUpdateRepo` in `Resources/Info.plist`) about ten seconds
+after launch and every six hours, and offers newer builds: Install and Relaunch downloads `Hackban.zip`, checks
+it's signed with the update key, that it's Hackban at that build with an intact code signature, swaps it in for
+the running copy and reopens it. Turn the automatic checks off in Settings → General; Hackban → Check for
+Updates… works either way, and on a local build offers the latest release. Hackban has to be somewhere it can
+write to, such as /Applications. Each release is a new ad-hoc signature, so after an update macOS asks once more
+to let Hackban read its Keychain item.
+
+### Signed releases
+
+An ad-hoc code signature shows the app arrived intact but not who built it, so releases are signed the way
+Sparkle signs them: CI signs `Hackban.zip` with an Ed25519 key from the `HACKBAN_UPDATE_KEY` secret and uploads
+the signature as `Hackban.zip.sig` next to it. The app verifies that against the public key in
+`Resources/Info.plist` (`HackbanUpdatePublicKey`) before unzipping anything, and refuses releases that are
+unsigned or signed with another key. A build without `HackbanUpdatePublicKey` doesn't check. The signing step
+fails, and nothing is published, if the secret is missing or isn't the private half of that public key.
+
+To make the key (once, on your own machine):
+
+```sh
+./Scripts/update-key.swift new ~/hackban-update-key     # prints the public key
+gh secret set HACKBAN_UPDATE_KEY < ~/hackban-update-key
+```
+
+Put the public key in `Resources/Info.plist` as `HackbanUpdatePublicKey`, keep the private key somewhere safe
+such as a password manager, and delete the file. Installed copies only trust the key they shipped with: changing
+keys takes one release that carries the new public key but is signed with the old private key (by hand, since CI
+insists the two match), and after losing the key everyone has to download the next build by hand.
 
 ## How it works
 

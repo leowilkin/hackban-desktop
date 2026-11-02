@@ -9,14 +9,16 @@ struct HomeView: View {
     private let columns = [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 14)]
 
     var body: some View {
+        let boards = app.visibleAccounts.reduce(0) { $0 + $1.allBoards.count }
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
+                PageTitle(title: "Home", detail: "\(boards) \(boards == 1 ? "board" : "boards")", icon: "square.grid.2x2")
                 ForEach(app.visibleAccounts) { a in
                     VStack(alignment: .leading, spacing: 18) {
                         if app.visibleAccounts.count > 1 {
                             HStack {
-                                Circle().fill(a.color).frame(width: 10, height: 10)
-                                Text(a.config.label).font(.title2.bold())
+                                Circle().fill(a.color).frame(width: 8, height: 8)
+                                Text(a.config.label).font(.headline)
                                 Text(a.host).foregroundStyle(.secondary)
                             }
                         }
@@ -29,17 +31,19 @@ struct HomeView: View {
                         ForEach(a.workspaces) { w in
                             VStack(alignment: .leading, spacing: 10) {
                                 HStack(spacing: 8) {
-                                    WorkspaceLogo(name: w.name, logo: w.logo, account: a, size: 24)
-                                    Text(w.name).font(.headline)
+                                    WorkspaceLogo(name: w.name, logo: w.logo, account: a, size: 18)
+                                    Text(w.name).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                                     Spacer()
                                     Button("Boards") { app.route = .workspace(account: a.id, id: w.id) }.buttonStyle(.link)
                                 }
                                 LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                                     ForEach(w.boards) { b in BoardTile(board: b, account: a) }
                                     Button { creatingBoard = a } label: {
-                                        Text("Create new board")
+                                        Label("New board", systemImage: "plus")
+                                            .foregroundStyle(.secondary)
                                             .frame(maxWidth: .infinity, minHeight: 90)
-                                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                                            .contentShape(RoundedRectangle(cornerRadius: 8))
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -52,6 +56,7 @@ struct HomeView: View {
             .padding(24)
         }
         .navigationTitle("Home")
+        .hidingToolbarTitle()
         .toolbar {
             ToolbarItem {
                 Button { Task { await app.refreshAll() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh")
@@ -62,7 +67,7 @@ struct HomeView: View {
 
     private func section(_ title: String, systemImage: String, _ boards: [BoardSummary], _ a: Account) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: systemImage).font(.headline)
+            Label(title, systemImage: systemImage).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
             LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                 ForEach(boards) { b in BoardTile(board: b, account: a) }
             }
@@ -101,7 +106,8 @@ struct BoardTile: View {
                 }
             }
             .frame(height: 90)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.08)))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }

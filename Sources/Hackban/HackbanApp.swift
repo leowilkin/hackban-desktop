@@ -47,10 +47,13 @@ struct HackbanCommands: Commands {
     let app: AppModel
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { Task { await Updater.shared.check(userInitiated: true) } }
+        }
         CommandGroup(after: .newItem) {
             Button("Quick Add Card…") { QuickAddController.shared.show() }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
-            Button("Go to Board…") { app.showPalette = true }
+            Button("Search…") { SearchController.shared.show() }
                 .keyboardShortcut("k", modifiers: .command)
             Button("Join Board from Link…") { JoinLinkPanel.present(app: app) }
             Divider()
@@ -61,7 +64,7 @@ struct HackbanCommands: Commands {
             Button("Home") { app.route = .home }.keyboardShortcut("1", modifiers: .command)
             Button("My Cards") { app.route = .myCards }.keyboardShortcut("2", modifiers: .command)
             Button("Notifications") { app.route = .notifications }.keyboardShortcut("3", modifiers: .command)
-            Button("Search") { app.route = .search }.keyboardShortcut("f", modifiers: [.command, .shift])
+            Button("Search") { SearchController.shared.show() }.keyboardShortcut("f", modifiers: [.command, .shift])
         }
     }
 }
@@ -74,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MainActor.assumeIsolated {
             HotKeyCenter.shared.registerSavedShortcut()
             AppModel.shared.start()
+            Updater.shared.start()
         }
     }
 
@@ -82,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationDidBecomeActive(_ notification: Notification) {
         MainActor.assumeIsolated {
             Task { await AppModel.shared.pollNotifications() }
+            Updater.shared.appDidBecomeActive()
         }
     }
 

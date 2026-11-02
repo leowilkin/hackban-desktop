@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>0</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -31,12 +31,18 @@
 			</array>
 		</dict>
 	</array>
+	<key>HackbanUpdatePublicKey</key>
+	<string>Nmye8zXe1rE7Gti2h61yqpe+x0p13fi+RGctM4IwvU8=</string>
+	<key>HackbanUpdateRepo</key>
+	<string>leowilkin/hackban-desktop</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSAccentColorName</key>
+	<string>AccentColor</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Hack Club</string>
 	<key>NSPrincipalClass</key>

@@ -38,7 +38,7 @@ struct ListColumn: View {
         }
         .frame(width: 272)
         .background(listBackground, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.accentColor, lineWidth: dropTarget ? 2 : 0))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(dropTarget ? Color.accentColor : Color.white.opacity(0.08), lineWidth: dropTarget ? 2 : 1))
         // Dropping on the list (not on a card) puts the card at the end.
         .dropDestination(for: String.self) { items, _ in
             guard let s = items.first, let cid = DragItem.cardId(s) else { return false }
@@ -89,19 +89,19 @@ struct ListColumn: View {
             } else {
                 Text(list.name).font(.headline).frame(maxWidth: .infinity, alignment: .leading)
             }
-            if model.filters.isActive {
-                Text("\(model.visibleCards(in: list).count)/\(list.openCards.count)").font(.caption).foregroundStyle(.secondary)
-            }
+            // Like Linear's column headers: the count, then the menu and an add button.
+            Text(model.filters.isActive ? "\(model.visibleCards(in: list).count)/\(list.openCards.count)" : "\(list.openCards.count)")
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
             if model.canEdit {
-                Menu {
-                    Section("Sort by") {
-                        ForEach(CardSort.allCases) { s in Button(s.title) { model.sortList(list.id, by: s) } }
-                    }
-                } label: { Image(systemName: "arrow.up.arrow.down") }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    .help("Sort list")
                 Menu { listMenu } label: { Image(systemName: "ellipsis") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("List actions")
+                Button { composeAtTop = true; composing = true } label: { Image(systemName: "plus") }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Add a card to the top")
             }
         }
         .padding(.horizontal, 10)
@@ -111,7 +111,9 @@ struct ListColumn: View {
 
     @ViewBuilder
     private var listMenu: some View {
-        Button("Add card") { composeAtTop = true; composing = true }
+        Menu("Sort by") {
+            ForEach(CardSort.allCases) { s in Button(s.title) { model.sortList(list.id, by: s) } }
+        }
         Button("Copy list…") { copyName = list.name; copying = true }
         if let b = model.board {
             Menu("Move list to board") {
@@ -180,8 +182,9 @@ struct CardFront: View {
     var body: some View {
         cardContent
             .background(.background, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(hovered ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 1.5))
-            .shadow(color: .black.opacity(0.12), radius: 0.5, y: 1)
+            // A hairline that brightens on hover, as in Linear, rather than an accent ring.
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(hovered ? 0.22 : 0.08)))
+            .shadow(color: .black.opacity(0.1), radius: 1, y: 1)
             .contentShape(RoundedRectangle(cornerRadius: 8))
             .onTapGesture { app.open(card: card.id, in: model.account) }
             .contextMenu { CardQuickMenu(model: model, card: card) }
