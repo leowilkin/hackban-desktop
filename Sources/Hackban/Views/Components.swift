@@ -38,10 +38,24 @@ struct BoardBackground: View {
 struct LabelChip: View {
     let label: HackbanKit.Label
     var compact = false
+    /// Draw a label with no name as a block, for pickers where it has to be easy to hit. Elsewhere it's a slim bar,
+    /// as on Trello's cards; an empty chip read as a stray button.
+    var swatch = false
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let style = Palette.label(label.color, dark: scheme == .dark)
+        if label.name.isEmpty && !swatch && !compact {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(style.map { Color(hex: $0.background) } ?? Color.secondary.opacity(0.3))
+                .frame(width: 32, height: 8)
+                .help(label.color ?? "No colour")
+        } else {
+            chip(style)
+        }
+    }
+
+    private func chip(_ style: Palette.LabelStyle?) -> some View {
         Text(label.name.isEmpty && !compact ? " " : label.name)
             .font(.caption.weight(.semibold))
             .lineLimit(1)

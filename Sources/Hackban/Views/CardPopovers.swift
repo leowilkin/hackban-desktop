@@ -251,7 +251,7 @@ struct LabelPicker: View {
                             HStack {
                                 Toggle("", isOn: Binding(get: { (model.card?.labelIds ?? card.labelIds).contains(l.id) }, set: { _ in model.toggleLabel(l) }))
                                     .labelsHidden()
-                                LabelChip(label: l).frame(maxWidth: .infinity, alignment: .leading)
+                                LabelChip(label: l, swatch: true).frame(maxWidth: .infinity, alignment: .leading)
                                 Button { editing = l } label: { Image(systemName: "pencil") }.buttonStyle(.borderless)
                             }
                         }
@@ -282,7 +282,7 @@ struct LabelEditor: View {
                 Button { done() } label: { Image(systemName: "chevron.left") }.buttonStyle(.borderless)
                 Text(label == nil ? "Create label" : "Edit label").font(.headline)
             }
-            LabelChip(label: HackbanKit.Label(id: "preview", name: name, color: color)).frame(maxWidth: .infinity)
+            LabelChip(label: HackbanKit.Label(id: "preview", name: name, color: color), swatch: true).frame(maxWidth: .infinity)
             TextField("Title", text: $name).textFieldStyle(.roundedBorder)
             Text("Select a colour").font(.caption.bold()).foregroundStyle(.secondary)
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(44), spacing: 6), count: 5), spacing: 6) {
