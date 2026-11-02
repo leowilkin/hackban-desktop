@@ -3,6 +3,8 @@ name: Build
 on:
   push:
   pull_request:
+  # "Run workflow" on main cuts a release without a push, e.g. after changing the signing secrets.
+  workflow_dispatch:
 
 jobs:
   macos:
@@ -50,7 +52,7 @@ jobs:
       # The updater only installs zips signed with the key whose public half is in the app's Info.plist. The
       # secret only reaches this step, and the script fails if it's missing or doesn't match that public key.
       - name: Sign release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           HACKBAN_UPDATE_KEY: ${{ secrets.HACKBAN_UPDATE_KEY }}
         run: |
@@ -58,7 +60,7 @@ jobs:
           ./Scripts/update-key.swift sign build/Hackban.zip "$public_key"
       # Artifacts need a signed-in download, so main's builds also go out as releases (build-<run number>).
       - name: Publish release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           BUILD_NUMBER: ${{ github.run_number }}

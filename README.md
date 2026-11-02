@@ -81,7 +81,8 @@ right-click → Open. Unless it's signed with the release certificate (see [Code
 also asks once per build to let it read its Keychain item.
 
 CI (`.github/workflows/build.yml`) runs the tests and builds `Hackban.app` on macOS for every push, and
-uploads it as an artifact. Builds of `main` are also published as GitHub releases tagged `build-<run number>`,
+uploads it as an artifact. Builds of `main` are also published as GitHub releases tagged `build-<run number>`
+(Actions → Build → Run workflow on `main` cuts one without a push),
 with the run number as the app's `CFBundleVersion` (`BUILD_NUMBER=… ./Scripts/bundle.sh`; local builds are 0).
 
 ## Updates
