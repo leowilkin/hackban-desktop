@@ -1,6 +1,9 @@
 import Foundation
 import XCTest
 @testable import HackbanKit
+#if os(macOS)
+import CryptoKit
+#endif
 
 final class UpdateTests: XCTestCase {
     /// Trimmed from a real `GET /repos/{owner}/{repo}/releases/latest` response.
@@ -14,6 +17,7 @@ final class UpdateTests: XCTestCase {
       "body": "fix: something",
       "assets": [
         {"name": "Hackban.zip", "size": 2048, "browser_download_url": "https://github.com/example/hackban-desktop/releases/download/build-42/Hackban.zip"},
+        {"name": "Hackban.zip.sig", "size": 64, "browser_download_url": "https://github.com/example/hackban-desktop/releases/download/build-42/Hackban.zip.sig"},
         {"name": "notes.txt", "size": 10, "browser_download_url": "https://github.com/example/hackban-desktop/releases/download/build-42/notes.txt"}
       ]
     }
@@ -26,6 +30,8 @@ final class UpdateTests: XCTestCase {
         XCTAssertEqual(r.notes, "fix: something")
         XCTAssertEqual(r.archive?.size, 2048)
         XCTAssertEqual(r.archive?.url.lastPathComponent, "Hackban.zip")
+        XCTAssertEqual(r.signature?.url.lastPathComponent, "Hackban.zip.sig")
+        XCTAssertNil(AppRelease(tag: "build-42", assets: [r.archive!]).signature)
     }
 
     func testBuildNumberOnlyFromBuildTags() {
@@ -75,6 +81,10 @@ final class UpdateTests: XCTestCase {
 #if os(macOS)
 final class InstallerTests: XCTestCase {
     var root: URL!
+    /// Stands in for CI's HACKBAN_UPDATE_KEY.
+    let key = Curve25519.Signing.PrivateKey()
+    /// What the app has as HackbanUpdatePublicKey.
+    var publicKey: String { key.publicKey.rawRepresentation.base64EncodedString() }
 
     override func setUpWithError() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("hackban-installer-\(UUID().uuidString)")
@@ -101,6 +111,13 @@ final class InstallerTests: XCTestCase {
         return zip
     }
 
+    /// Signs `zip` the way `Scripts/update-key.swift sign` does, into `Hackban.zip.sig` beside it.
+    func sign(_ zip: URL, with key: Curve25519.Signing.PrivateKey? = nil) throws -> URL {
+        let sig = zip.appendingPathExtension("sig")
+        try (key ?? self.key).signature(for: Data(contentsOf: zip)).write(to: sig)
+        return sig
+    }
+
     /// Read from disk: `Bundle` caches what it read at a path, which the swap doesn't invalidate.
     func build(of app: URL) -> String? {
         NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist"))?["CFBundleVersion"] as? String
@@ -109,7 +126,8 @@ final class InstallerTests: XCTestCase {
     func testInstallsTheNewBuild() async throws {
         let installed = try await makeApp("installed", build: 1)
         let archive = try await zip(try await makeApp("release", build: 2))
-        try await AppInstaller.install(from: archive, build: 2, bundleIdentifier: "com.example.fake", replacing: installed)
+        try await AppInstaller.install(from: archive, signature: try sign(archive), publicKey: publicKey, build: 2,
+                                       bundleIdentifier: "com.example.fake", replacing: installed)
         XCTAssertEqual(build(of: installed), "2")
         try await AppInstaller.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", installed.path])
     }
@@ -118,7 +136,8 @@ final class InstallerTests: XCTestCase {
         let installed = try await makeApp("installed", build: 1)
         let archive = try await zip(try await makeApp("release", build: 2))
         await assertFails("The download isn't build 3.") {
-            try await AppInstaller.install(from: archive, build: 3, bundleIdentifier: "com.example.fake", replacing: installed)
+            try await AppInstaller.install(from: archive, signature: try sign(archive), publicKey: publicKey, build: 3,
+                                           bundleIdentifier: "com.example.fake", replacing: installed)
         }
         XCTAssertEqual(build(of: installed), "1")
     }
@@ -127,7 +146,8 @@ final class InstallerTests: XCTestCase {
         let installed = try await makeApp("installed", build: 1)
         let archive = try await zip(try await makeApp("release", build: 2, id: "com.example.other"))
         await assertFails("The download isn't this app.") {
-            try await AppInstaller.install(from: archive, build: 2, bundleIdentifier: "com.example.fake", replacing: installed)
+            try await AppInstaller.install(from: archive, signature: try sign(archive), publicKey: publicKey, build: 2,
+                                           bundleIdentifier: "com.example.fake", replacing: installed)
         }
         XCTAssertEqual(build(of: installed), "1")
     }
@@ -135,13 +155,71 @@ final class InstallerTests: XCTestCase {
     func testRefusesATamperedApp() async throws {
         let installed = try await makeApp("installed", build: 1)
         let release = try await makeApp("release", build: 2)
-        // Changed after signing.
+        // Changed after codesigning, then zipped and signed as if CI had built it that way.
         try Data("#!/bin/sh\necho hi\n".utf8).write(to: release.appendingPathComponent("Contents/MacOS/Fake"))
         let archive = try await zip(release)
         await assertFails("The download is damaged: its code signature doesn't check out.") {
-            try await AppInstaller.install(from: archive, build: 2, bundleIdentifier: "com.example.fake", replacing: installed)
+            try await AppInstaller.install(from: archive, signature: try sign(archive), publicKey: publicKey, build: 2,
+                                           bundleIdentifier: "com.example.fake", replacing: installed)
         }
         XCTAssertEqual(build(of: installed), "1")
+    }
+
+    func testRefusesAnUnsignedRelease() async throws {
+        let installed = try await makeApp("installed", build: 1)
+        let archive = try await zip(try await makeApp("release", build: 2))
+        await assertFails("The download isn't signed.") {
+            try await AppInstaller.install(from: archive, signature: nil, publicKey: publicKey, build: 2,
+                                           bundleIdentifier: "com.example.fake", replacing: installed)
+        }
+        XCTAssertEqual(build(of: installed), "1")
+    }
+
+    func testRefusesAnotherKeysSignature() async throws {
+        let installed = try await makeApp("installed", build: 1)
+        let archive = try await zip(try await makeApp("release", build: 2))
+        let signature = try sign(archive, with: Curve25519.Signing.PrivateKey())
+        await assertFails("The download isn't signed with Hackban's update key.") {
+            try await AppInstaller.install(from: archive, signature: signature, publicKey: publicKey, build: 2,
+                                           bundleIdentifier: "com.example.fake", replacing: installed)
+        }
+        XCTAssertEqual(build(of: installed), "1")
+    }
+
+    func testRefusesAZipChangedAfterSigning() async throws {
+        let installed = try await makeApp("installed", build: 1)
+        let release = try await makeApp("release", build: 2)
+        let archive = try await zip(release)
+        let signature = try sign(archive)
+        // Swapped for another app that passes every other check: right id and build, freshly ad-hoc signed. This is
+        // the case codesign alone can't catch.
+        try Data("#!/bin/sh\necho hi\n".utf8).write(to: release.appendingPathComponent("Contents/MacOS/Fake"))
+        try await AppInstaller.run("/usr/bin/codesign", ["--force", "--sign", "-", release.path])
+        try FileManager.default.removeItem(at: archive)
+        _ = try await zip(release)
+        await assertFails("The download isn't signed with Hackban's update key.") {
+            try await AppInstaller.install(from: archive, signature: signature, publicKey: publicKey, build: 2,
+                                           bundleIdentifier: "com.example.fake", replacing: installed)
+        }
+        XCTAssertEqual(build(of: installed), "1")
+    }
+
+    func testRefusesAnInvalidKey() async throws {
+        let installed = try await makeApp("installed", build: 1)
+        let archive = try await zip(try await makeApp("release", build: 2))
+        await assertFails("This build's update key (HackbanUpdatePublicKey) isn't valid.") {
+            try await AppInstaller.install(from: archive, signature: try sign(archive), publicKey: "not a key", build: 2,
+                                           bundleIdentifier: "com.example.fake", replacing: installed)
+        }
+        XCTAssertEqual(build(of: installed), "1")
+    }
+
+    func testWithoutAKeyTheZipIsntChecked() async throws {
+        let installed = try await makeApp("installed", build: 1)
+        let archive = try await zip(try await makeApp("release", build: 2))
+        try await AppInstaller.install(from: archive, signature: nil, publicKey: nil, build: 2,
+                                       bundleIdentifier: "com.example.fake", replacing: installed)
+        XCTAssertEqual(build(of: installed), "2")
     }
 
     func assertFails(_ message: String, file: StaticString = #filePath, line: UInt = #line, _ body: () async throws -> Void) async {
