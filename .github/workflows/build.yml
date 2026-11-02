@@ -33,7 +33,20 @@ jobs:
           security set-keychain-settings -lut 3600 "$kc"
           security unlock-keychain -p "$pw" "$kc"
           printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
-          security import "$RUNNER_TEMP/signing.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          # A .p12 from a newer Keychain Access can be in a format this runner's `security` won't read, with the same
+          # error as a wrong password. OpenSSL tells the two apart, and rewrites it in the older format if needed.
+          if ! security import "$RUNNER_TEMP/signing.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign; then
+            openssl="$(brew --prefix openssl@3)/bin/openssl"
+            if ! "$openssl" pkcs12 -in "$RUNNER_TEMP/signing.p12" -noout -passin env:P12_PASSWORD; then
+              echo "::error::HACKBAN_SIGNING_P12_PASSWORD doesn't open HACKBAN_SIGNING_P12. Set it again, or export a fresh .p12."
+              exit 1
+            fi
+            echo "Rewriting the .p12 in the older format the runner's security tool reads."
+            "$openssl" pkcs12 -in "$RUNNER_TEMP/signing.p12" -nodes -passin env:P12_PASSWORD \
+              | "$openssl" pkcs12 -export -legacy -passout env:P12_PASSWORD -out "$RUNNER_TEMP/signing-legacy.p12"
+            security import "$RUNNER_TEMP/signing-legacy.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign
+            rm "$RUNNER_TEMP/signing-legacy.p12"
+          fi
           rm "$RUNNER_TEMP/signing.p12"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pw" "$kc" > /dev/null
           security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
