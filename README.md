@@ -18,14 +18,17 @@ once.
 - **Cards**: title, markdown description, labels (create/edit/delete), members, start/due dates, repeat,
   complete, cover (colour or image, normal/full), checklists (add/rename/delete/copy, item due dates and
   assignees, drag to reorder, hide checked), attachments (upload from a picker, drag files onto a card, or
-  paste; links; rename; make cover; open), comments (edit/delete your own), activity, watch, dependencies
+  paste; links; rename; make cover; open), GitHub issues (a pasted or attached issue link is tracked, with its
+  title and state on the card, refresh, remove; the server marks the card complete when the issue closes),
+  comments (edit/delete your own), activity, watch, dependencies
   (blocked by / blocking), move and copy anywhere on the same server, archive/restore, delete.
 - **Hover shortcuts** on a board, matching the web: `Enter` open, `e` quick edit (or right-click), `d`
   complete, `c` archive, `Space` join/leave, `1`–`0` toggle labels, `q` my cards, `x` clear filters, `w` board
   menu, `/` filters.
 - **Workspaces**: boards (sorted by activity or name), members and roles, email invites, auto-join domains,
   logo, rename, leave, delete. Closed boards, guest boards, join from an invite link.
-- **Profile**: name, username, picture (upload or back to Slack), your activity, connected apps.
+- **Profile**: name, username, picture (upload or back to Slack), your activity, connected apps, and your GitHub
+  account (connecting happens in the browser, since it's an OAuth flow on the web session; disconnecting works here).
 
 ### Desktop extras
 
@@ -45,7 +48,8 @@ once.
 - **Offline mode.** Boards and cards you've opened are kept on this Mac, per server, so they open without a
   connection (the window says "Offline, updated …"). Most edits work offline: card title, description, dates,
   complete, repeat, cover colour, labels, members, watch, move and reorder, archive, delete, checklists and their
-  items, comments, links, and list create, rename, colour, reorder, archive and sort. They wait on the Mac and sync
+  items, comments, links, tracking and untracking GitHub issues, and list create, rename, colour, reorder, archive and
+  sort. They wait on the Mac and sync
   in order when the server's back. The sidebar and toolbar show what's waiting and what couldn't sync, and settle
   conflicts. Uploads, copying, moving to another board, board settings and sharing need a connection.
 - **Menu bar extra** with quick add, what's due in the next three days, and unread notifications.

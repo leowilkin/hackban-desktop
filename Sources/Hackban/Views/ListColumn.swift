@@ -310,6 +310,17 @@ struct CardFront: View {
                 } else if model.sync.isOffline && model.sync.pendingCardIds.contains(card.id) {
                     Image(systemName: "icloud.and.arrow.up").help("Changed while offline. It'll sync when you're back online.")
                 }
+                ForEach(card.trackedIssues) { i in
+                    Button { NSWorkspace.shared.open(i.url) } label: {
+                        HStack(spacing: 2) {
+                            IssueStateIcon(issue: i, size: 12)
+                            Text("#\(i.number)")
+                        }
+                        .foregroundStyle(IssueStateIcon.color(i))
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(i.label)\(i.title.map { $0.isEmpty ? "" : ": \($0)" } ?? "") (\(IssueStateIcon.status(i)))")
+                }
                 if card.watching == true { Image(systemName: "eye").help("You're watching this card") }
                 DueBadge(card: card) { if model.canEdit { model.updateCard(card.id, .init(dueComplete: !card.dueComplete)) } }
                 if !card.description.isEmpty { Image(systemName: "text.alignleft").help("This card has a description") }
@@ -334,7 +345,7 @@ extension CardFront {
     func hasAnyBadge(total: Int, members: [User]) -> Bool {
         if card.due != nil || card.watching == true || !card.description.isEmpty { return true }
         if model.sync.failedCardIds.contains(card.id) || (model.sync.isOffline && model.sync.pendingCardIds.contains(card.id)) { return true }
-        if card.commentCount > 0 || card.attachmentCount > 0 || total > 0 { return true }
+        if card.commentCount > 0 || card.attachmentCount > 0 || total > 0 || !card.trackedIssues.isEmpty { return true }
         return card.isBlocked || card.isBlocking || !members.isEmpty
     }
 }

@@ -199,6 +199,10 @@ public enum Change: Codable, Equatable, Sendable {
     case renameAttachment(id: String, cardId: String, name: String)
     case deleteAttachment(id: String, cardId: String)
 
+    /// Track a GitHub issue on a card. The server fetches its title and state; until then it shows as open.
+    case trackIssue(id: String, cardId: String, issue: GitHubIssueRef)
+    case untrackIssue(id: String, cardId: String)
+
     case createList(id: String, name: String)
     case updateList(id: String, patch: ListPatch)
     case moveList(id: String, above: [String])
@@ -208,7 +212,7 @@ public enum Change: Codable, Equatable, Sendable {
     public var created: String? {
         switch self {
         case .createCard(let id, _, _, _), .addChecklist(let id, _, _), .addCheckItem(let id, _, _, _),
-             .addComment(let id, _, _, _, _), .addLink(let id, _, _, _), .createList(let id, _):
+             .addComment(let id, _, _, _, _), .addLink(let id, _, _, _), .trackIssue(let id, _, _), .createList(let id, _):
             return id
         default: return nil
         }
@@ -222,6 +226,7 @@ public enum Change: Codable, Equatable, Sendable {
              .addCheckItem(let id, _, _, _), .updateCheckItem(let id, _, _, _), .moveCheckItem(let id, _, _, _), .deleteCheckItem(let id, _),
              .addComment(let id, _, _, _, _), .editComment(let id, _, _), .deleteComment(let id, _),
              .addLink(let id, _, _, _), .renameAttachment(let id, _, _), .deleteAttachment(let id, _),
+             .trackIssue(let id, _, _), .untrackIssue(let id, _),
              .createList(let id, _), .updateList(let id, _), .moveList(let id, _), .sortList(let id, _):
             return id
         case .setLabel(let c, _, _, _), .setMember(let c, _, _, _), .watch(let c, _, _):
@@ -237,7 +242,8 @@ public enum Change: Codable, Equatable, Sendable {
         case .addChecklist(_, let c, _), .renameChecklist(_, let c, _), .deleteChecklist(_, let c),
              .addCheckItem(_, let c, _, _), .updateCheckItem(_, let c, _, _), .moveCheckItem(_, let c, _, _), .deleteCheckItem(_, let c),
              .addComment(_, let c, _, _, _), .editComment(_, let c, _), .deleteComment(_, let c),
-             .addLink(_, let c, _, _), .renameAttachment(_, let c, _), .deleteAttachment(_, let c):
+             .addLink(_, let c, _, _), .renameAttachment(_, let c, _), .deleteAttachment(_, let c),
+             .trackIssue(_, let c, _), .untrackIssue(_, let c):
             return c
         case .createList, .updateList, .moveList, .sortList: return nil
         }
@@ -252,12 +258,12 @@ public enum Change: Codable, Equatable, Sendable {
         case .addChecklist(_, let c, _): return [c]
         case .addCheckItem(_, let c, let cl, _): return [c, cl]
         case .moveCheckItem(let id, let c, let cl, _): return [id, c, cl]
-        case .addComment(_, let c, _, _, _), .addLink(_, let c, _, _): return [c]
+        case .addComment(_, let c, _, _, _), .addLink(_, let c, _, _), .trackIssue(_, let c, _): return [c]
         case .createList: return []
         case .sortList(let id, _): return [id]
         case .renameChecklist(let id, let c, _), .deleteChecklist(let id, let c), .updateCheckItem(let id, let c, _, _),
              .deleteCheckItem(let id, let c), .editComment(let id, let c, _), .deleteComment(let id, let c),
-             .renameAttachment(let id, let c, _), .deleteAttachment(let id, let c):
+             .renameAttachment(let id, let c, _), .deleteAttachment(let id, let c), .untrackIssue(let id, let c):
             return [id, c]
         default: return [subject]
         }
@@ -265,7 +271,7 @@ public enum Change: Codable, Equatable, Sendable {
 
     public var isDelete: Bool {
         switch self {
-        case .deleteCard, .deleteChecklist, .deleteCheckItem, .deleteComment, .deleteAttachment: return true
+        case .deleteCard, .deleteChecklist, .deleteCheckItem, .deleteComment, .deleteAttachment, .untrackIssue: return true
         default: return false
         }
     }
@@ -293,6 +299,8 @@ public enum Change: Codable, Equatable, Sendable {
         case .addLink(let id, let c, let u, let n): return .addLink(id: f(id), cardId: f(c), url: u, name: n)
         case .renameAttachment(let id, let c, let n): return .renameAttachment(id: f(id), cardId: f(c), name: n)
         case .deleteAttachment(let id, let c): return .deleteAttachment(id: f(id), cardId: f(c))
+        case .trackIssue(let id, let c, let ref): return .trackIssue(id: f(id), cardId: f(c), issue: ref)
+        case .untrackIssue(let id, let c): return .untrackIssue(id: f(id), cardId: f(c))
         case .createList(let id, let n): return .createList(id: f(id), name: n)
         case .updateList(let id, let p): return .updateList(id: f(id), patch: p)
         case .moveList(let id, let above): return .moveList(id: f(id), above: above.map(f))
@@ -305,7 +313,7 @@ public enum Change: Codable, Equatable, Sendable {
     public var refreshesBoard: Bool {
         switch self {
         case .createCard, .createList, .addCheckItem, .updateCheckItem, .deleteCheckItem, .deleteChecklist,
-             .addComment, .deleteComment, .addLink, .deleteAttachment:
+             .addComment, .deleteComment, .addLink, .deleteAttachment, .trackIssue, .untrackIssue:
             return true
         case .updateCard(_, let p, _): return p.dueComplete == true || p.closed == false
         default: return false
@@ -350,6 +358,8 @@ public enum Change: Codable, Equatable, Sendable {
         case .addLink: return on("Attached a link")
         case .renameAttachment: return on("Renamed an attachment")
         case .deleteAttachment: return on("Deleted an attachment")
+        case .trackIssue(_, _, let ref): return on("Tracked GitHub issue \(ref.label)")
+        case .untrackIssue: return on("Stopped tracking a GitHub issue")
         case .createList(_, let n): return "Added list “\(n)”"
         case .updateList(_, let p):
             if p.closed == true { return "Archived list \(t ?? "")" }
@@ -401,6 +411,14 @@ public extension Change {
 
         case .watch(let cardId, let on, _):
             editCard(cardId, in: &b) { $0.watching = on }
+
+        case .trackIssue(let id, let cardId, let ref):
+            editCard(cardId, in: &b) { c in
+                guard !c.trackedIssues.contains(where: { $0.id == id || $0.ref == ref }) else { return }
+                c.issues = c.trackedIssues + [GitHubIssue(id: id, cardId: cardId, ref: ref)]
+            }
+        case .untrackIssue(let id, let cardId):
+            editCard(cardId, in: &b) { $0.issues?.removeAll { $0.id == id } }
 
         case .deleteCard(let id):
             guard let (li, ci) = b.list(containing: id) else { return }
@@ -497,6 +515,12 @@ public extension Change {
         case .deleteAttachment(let id, _):
             c.attachments?.removeAll { $0.id == id }
             if c.coverAttachmentId == id { c.coverAttachmentId = nil; c.coverUrl = nil }
+
+        case .trackIssue(let id, _, let ref):
+            guard !c.trackedIssues.contains(where: { $0.id == id || $0.ref == ref }) else { return }
+            c.issues = c.trackedIssues + [GitHubIssue(id: id, cardId: c.id, ref: ref)]
+        case .untrackIssue(let id, _):
+            c.issues?.removeAll { $0.id == id }
 
         case .createCard, .deleteCard, .createList, .updateList, .moveList, .sortList:
             break

@@ -408,14 +408,19 @@ struct AttachmentAdder: View {
     @State private var name = ""
 
     var body: some View {
+        let tracksIssues = model.card?.tracksIssues == true
+        let isIssue = tracksIssues && GitHubIssueRef.parse(url) != nil
         VStack(alignment: .leading, spacing: 10) {
             Text("Attach").font(.headline)
             Button("Choose files…") { done(); importing = true }
             Text("You can also drag files onto the card, or paste them.").font(.caption).foregroundStyle(.secondary)
             Divider()
             TextField("Paste a link", text: $url).textFieldStyle(.roundedBorder)
-            TextField("Display text (optional)", text: $name).textFieldStyle(.roundedBorder)
-            Button("Attach link") {
+            if tracksIssues {
+                Text("A GitHub issue link is tracked instead: the card completes when the issue closes.").font(.caption).foregroundStyle(.secondary)
+            }
+            if !isIssue { TextField("Display text (optional)", text: $name).textFieldStyle(.roundedBorder) }
+            Button(isIssue ? "Track issue" : "Attach link") {
                 var u = url.trimmingCharacters(in: .whitespaces)
                 if !u.isEmpty, !u.lowercased().hasPrefix("http") { u = "https://" + u }
                 if !u.isEmpty { model.addLink(u, name: name.isEmpty ? nil : name) }
