@@ -19,7 +19,9 @@ private struct GeneralSettings: View {
     @AppStorage("hackban:notify") private var notify = true
     @AppStorage("hackban:menuBarExtra") private var menuBar = true
     @AppStorage("hackban:defaultDueHour") private var dueHour = 12
+    @AppStorage(Updater.automaticKey) private var autoUpdate = true
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    private var updater: Updater { .shared }
 
     var body: some View {
         Form {
@@ -39,6 +41,18 @@ private struct GeneralSettings: View {
             Picker("Default time for new due dates", selection: $dueHour) {
                 ForEach(0..<24, id: \.self) { h in
                     Text(Calendar.current.date(bySettingHour: h, minute: 0, second: 0, of: Date())!.formatted(date: .omitted, time: .shortened)).tag(h)
+                }
+            }
+            Section {
+                Toggle("Check for updates automatically", isOn: $autoUpdate)
+                LabeledContent("Hackban \(updater.versionDescription)") {
+                    Button("Check Now") { Task { await updater.check(userInitiated: true) } }.disabled(updater.busy)
+                }
+            } header: {
+                Text("Updates")
+            } footer: {
+                if updater.build == 0 {
+                    Text("This is a local build, so it only checks when you ask.").font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
@@ -202,6 +216,11 @@ struct MenuBarView: View {
             }
             .buttonStyle(.plain)
             Button("Open Hackban") { show() }.buttonStyle(.plain)
+            if let release = Updater.shared.available, let n = release.build {
+                Button("Update to Build \(n)") { Task { await Updater.shared.install(release) } }
+                    .buttonStyle(.plain)
+                    .disabled(Updater.shared.busy)
+            }
             Divider()
             Button("Quit Hackban") { NSApp.terminate(nil) }.buttonStyle(.plain)
         }

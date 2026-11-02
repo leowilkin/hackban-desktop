@@ -73,7 +73,17 @@ as the SDK version, so macOS shows the pre-26 design. The app is ad-hoc signed, 
 right-click → Open, and macOS may ask once per build to let it read its Keychain item.
 
 CI (`.github/workflows/build.yml`) runs the tests and builds `Hackban.app` on macOS for every push, and
-uploads it as an artifact.
+uploads it as an artifact. Builds of `main` are also published as GitHub releases tagged `build-<run number>`,
+with the run number as the app's `CFBundleVersion` (`BUILD_NUMBER=… ./Scripts/bundle.sh`; local builds are 0).
+
+## Updates
+
+The app checks this repo's latest release (`HackbanUpdateRepo` in `Resources/Info.plist`) about ten seconds
+after launch and every six hours, and offers newer builds: Install and Relaunch downloads `Hackban.zip`, checks
+it's Hackban at that build with an intact signature, swaps it in for the running copy and reopens it. Turn the
+automatic checks off in Settings → General; Hackban → Check for Updates… works either way, and on a local build
+offers the latest release. Hackban has to be somewhere it can write to, such as /Applications. Each release is
+a new ad-hoc signature, so after an update macOS asks once more to let Hackban read its Keychain item.
 
 ## How it works
 
