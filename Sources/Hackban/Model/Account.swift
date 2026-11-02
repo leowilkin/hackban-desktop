@@ -42,6 +42,8 @@ final class Account: Identifiable {
     var signedOut = false
     var lastError: String?
     var loaded = false
+    /// What this Mac kept for the account was forgotten (it was someone else's).
+    @ObservationIgnored var onForgotten: (() -> Void)?
 
     var client: TRPCClient { api.client }
     var me: String? { profile?.id }
@@ -68,6 +70,40 @@ final class Account: Identifiable {
             myCards = s.myCards
             loaded = true
         }
+        sync.setCacheOwner(profile?.id ?? sync.queue.userId)
+    }
+
+    /// A profile fetched with the current tokens says who this is. If what's kept on this Mac belonged to
+    /// someone else, it's forgotten; then changes made as this user can go.
+    func confirmIdentity(_ userId: String) {
+        if sync.confirm(userId) == .someoneElse {
+            forgetLocalData()
+            onForgotten?()
+        }
+        sync.drain()
+    }
+
+    /// New tokens are about to replace this account's. Until a profile fetched with them says who this is,
+    /// nothing kept on this Mac is shown or sent.
+    func beginSignIn() {
+        sync.beginSignIn()
+        clearLists()
+    }
+
+    /// Takes everything kept for this account off the Mac (and out of memory).
+    func forgetLocalData() {
+        clearLists()
+        sync.wipe()
+    }
+
+    private func clearLists() {
+        profile = nil
+        workspaces = []
+        guestBoards = []
+        recent = []
+        notifications = []
+        myCards = []
+        loaded = false
     }
 
     private func saveSnapshot() {
@@ -90,7 +126,9 @@ final class Account: Identifiable {
             async let g = api.guestBoards()
             async let r = api.recentBoards()
             async let n = api.notifications()
-            profile = try await p
+            let me = try await p
+            confirmIdentity(me.id)
+            profile = me
             workspaces = try await w
             guestBoards = try await g
             recent = try await r

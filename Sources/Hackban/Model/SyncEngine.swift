@@ -17,6 +17,8 @@ final class SyncEngine {
     @ObservationIgnored private let api: HackbanAPI
 
     private(set) var queue: OfflineQueue
+    /// Who changes may be sent as, and whether what's kept here can be shown (see `IdentityGate`).
+    private(set) var identity = IdentityGate()
     private(set) var isOffline = false
     private(set) var offlineSince: Date?
     /// Sending queued changes right now.
@@ -82,7 +84,7 @@ final class SyncEngine {
     var pendingCount: Int { queue.pending.count }
     var hasFailures: Bool { !queue.failed.isEmpty }
     /// Worth showing a sync status for.
-    var hasStatus: Bool { isOffline || !queue.isEmpty || queueSetAside != nil }
+    var hasStatus: Bool { isOffline || !queue.isEmpty || queueSetAside != nil || !identity.showsCache }
 
     func resolve(_ id: String) -> String { aliases[id] ?? queue.resolve(id) }
 
@@ -155,6 +157,14 @@ final class SyncEngine {
     }
 
     private func recompute() {
+        // A new sign-in that isn't confirmed yet: nothing kept here is shown, it may be someone else's.
+        guard identity.showsCache else {
+            if !boards.isEmpty { boards = [:] }
+            if !cards.isEmpty { cards = [:] }
+            if !pendingCardIds.isEmpty { pendingCardIds = [] }
+            if !failedCardIds.isEmpty { failedCardIds = [] }
+            return
+        }
         aliases = inDoubtAliases()
         let ops = queue.pending
             .filter { $0.change.created.map { aliases[$0] == nil } ?? true }
@@ -180,7 +190,7 @@ final class SyncEngine {
     }
 
     private func inDoubtAliases() -> [String: String] {
-        let finder = Replayer(api: api, me: account?.me)
+        let finder = Replayer(api: api, me: identity.verified)
         let mapped = Set(queue.ids.values)
         var out: [String: String] = [:]
         for op in queue.pending where op.sentAt != nil {
@@ -231,7 +241,7 @@ final class SyncEngine {
     // MARK: changes
 
     func perform(_ change: Change, board boardId: String) {
-        if queue.isEmpty || queue.userId == nil { queue.userId = account?.me }
+        if queue.isEmpty || queue.userId == nil { queue.userId = identity.verified ?? account?.me }
         queue.enqueue(PendingOp(boardId: boardId, change: queue.resolved(change)))
         saveQueue()
         recompute()
@@ -291,15 +301,22 @@ final class SyncEngine {
 
     private func runQueue() async {
         guard let account else { return }
-        if let uid = queue.userId, let me = account.me, uid != me {
-            queue.failAll(reason: "These changes were made while signed in as someone else, so they weren't sent.")
-            saveQueue()
-            recompute()
-            return
-        }
-        let replayer = Replayer(api: api, me: account.me)
         let failedBefore = queue.failed.count
         loop: while !isOffline, !account.signedOut {
+            // Checked before every change: a sign-in can start while the queue drains.
+            switch identity.send(madeBy: queue.userId) {
+            case .send:
+                break
+            case .hold:
+                break loop
+            case .wrongUser:
+                refuseAll("These changes were made while signed in as someone else, so they weren't sent.")
+                break loop
+            case .unknownMaker:
+                refuseAll("It isn't known which account made these changes, so they weren't sent.")
+                break loop
+            }
+            let replayer = Replayer(api: api, me: identity.verified)
             let boardSnaps = boardSnapshots, cardSnaps = cardSnapshots
             guard let (op, inDoubt) = queue.prepareNext(replayer: replayer, snapshots: { o in
                 (boardSnaps[o.boardId], o.change.cardId.flatMap { cardSnaps[$0] })
@@ -347,6 +364,37 @@ final class SyncEngine {
             let n = queue.failed.count - failedBefore
             if n > 0 { onMessage?(n == 1 ? "1 change couldn't sync. The sync status has the details." : "\(n) changes couldn't sync. The sync status has the details.") }
         }
+    }
+
+    private func refuseAll(_ reason: String) {
+        queue.failAll(reason: reason)
+        saveQueue()
+        recompute()
+    }
+
+    // MARK: identity
+
+    /// Whose data is kept here, as far as is known (from the cached profile, or the queue).
+    func setCacheOwner(_ userId: String?) { identity.cacheOwner = userId }
+
+    /// New tokens are about to be installed: hide what's kept and send nothing until they're confirmed.
+    func beginSignIn() {
+        identity.beginSignIn()
+        recompute()
+    }
+
+    /// A profile fetched with the current tokens says who this is. The caller forgets what's kept if it
+    /// was someone else's, then lets the queue go.
+    func confirm(_ userId: String) -> IdentityGate.Confirmed {
+        let result = identity.confirm(userId)
+        recompute()
+        return result
+    }
+
+    /// Signed out on purpose.
+    func forgetIdentity() {
+        identity.reset()
+        recompute()
     }
 
     /// At launch or after signing in again: catch up on whatever's waiting.
@@ -409,7 +457,9 @@ final class SyncEngine {
                 if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
                 guard let self, self.isOffline, !Task.isCancelled else { return }
                 do {
-                    _ = try await self.api.profile()
+                    // Reachable again, and this confirms who the tokens belong to.
+                    let profile = try await self.api.profile()
+                    self.account?.confirmIdentity(profile.id)
                     self.cameOnline()
                     return
                 } catch {
