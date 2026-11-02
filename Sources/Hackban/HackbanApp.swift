@@ -47,6 +47,9 @@ struct HackbanCommands: Commands {
     let app: AppModel
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { Task { await Updater.shared.check(userInitiated: true) } }
+        }
         CommandGroup(after: .newItem) {
             Button("Quick Add Card…") { QuickAddController.shared.show() }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
@@ -74,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MainActor.assumeIsolated {
             HotKeyCenter.shared.registerSavedShortcut()
             AppModel.shared.start()
+            Updater.shared.start()
         }
     }
 
@@ -82,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationDidBecomeActive(_ notification: Notification) {
         MainActor.assumeIsolated {
             Task { await AppModel.shared.pollNotifications() }
+            Updater.shared.appDidBecomeActive()
         }
     }
 

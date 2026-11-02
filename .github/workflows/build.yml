@@ -8,6 +8,8 @@ jobs:
   macos:
     # Xcode 26+ (macOS 26 SDK), or the app gets no Liquid Glass.
     runs-on: macos-26
+    permissions:
+      contents: write # to publish releases, which the app's updater installs
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -16,12 +18,25 @@ jobs:
         run: swift test
       - name: Build Hackban.app
         run: ./Scripts/bundle.sh
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
       - name: Zip
         run: cd build && ditto -c -k --keepParent Hackban.app Hackban.zip
       - uses: actions/upload-artifact@v4
         with:
           name: Hackban
           path: build/Hackban.zip
+      # Artifacts need a signed-in download, so main's builds also go out as releases (build-<run number>).
+      - name: Publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          tag="build-$BUILD_NUMBER"
+          if gh release view "$tag" >/dev/null 2>&1; then echo "$tag already released"; exit 0; fi
+          gh release create "$tag" build/Hackban.zip --target "$GITHUB_SHA" \
+            --title "Build $BUILD_NUMBER" --notes "$(git log -1 --format=%s)"
 
   linux-kit:
     runs-on: ubuntu-24.04
