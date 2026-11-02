@@ -47,13 +47,16 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
-            HStack {
-                Button { app.addingAccount = true } label: { Label("Add Server", systemImage: "plus") }
-                    .buttonStyle(.borderless)
-                Spacer()
-                Button { QuickAddController.shared.show() } label: { Image(systemName: "plus.rectangle.on.rectangle") }
-                    .buttonStyle(.borderless)
-                    .help("Quick add a card (\(HotKeyCenter.shared.shortcut?.display ?? "⌃⌥Space"))")
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(app.visibleAccounts.filter(\.sync.hasStatus)) { a in SyncStatusRow(account: a) }
+                HStack {
+                    Button { app.addingAccount = true } label: { Label("Add Server", systemImage: "plus") }
+                        .buttonStyle(.borderless)
+                    Spacer()
+                    Button { QuickAddController.shared.show() } label: { Image(systemName: "plus.rectangle.on.rectangle") }
+                        .buttonStyle(.borderless)
+                        .help("Quick add a card (\(HotKeyCenter.shared.shortcut?.display ?? "⌃⌥Space"))")
+                }
             }
             .padding(10)
         }
@@ -135,6 +138,7 @@ private struct AccountSections: View {
             if several { Circle().fill(account.color).frame(width: 8, height: 8) }
             Text(title).lineLimit(1)
             if several && title != account.config.label { Text(account.config.label).foregroundStyle(.tertiary).lineLimit(1) }
+            if account.sync.isOffline { Image(systemName: "icloud.slash").foregroundStyle(.secondary).help("Offline: can't reach \(account.host)") }
             // Next to the title rather than trailing: the collapse chevron only shows on hover and takes the
             // trailing edge, which pushed a trailing button sideways.
             Menu { items } label: {

@@ -125,14 +125,24 @@ final class QuickAddState {
     func load(_ key: String) {
         guard !key.isEmpty, details[key] == nil, !loading.contains(key), let a = account(for: key) else { return }
         let boardId = String(key.split(separator: "|")[1])
+        // What's been downloaded first (so quick add works offline), then the server's latest.
+        a.sync.loadCachedBoard(boardId)
+        if let b = a.sync.boards[boardId] { loaded(b, key: key) }
+        guard !a.sync.isOffline else { return }
         loading.insert(key)
         Task {
             defer { loading.remove(key) }
+            let started = Date()
             if let b = try? await a.api.board(boardId) {
-                details[key] = b
-                if key == boardKey, listId.isEmpty || !b.lists.contains(where: { $0.id == listId }) { listId = b.lists.first?.id ?? "" }
+                a.sync.store(board: b, fetchStarted: started)
+                loaded(a.sync.boards[boardId] ?? b, key: key)
             }
         }
+    }
+
+    private func loaded(_ b: Board, key: String) {
+        details[key] = b
+        if key == boardKey, listId.isEmpty || !b.lists.contains(where: { $0.id == listId }) { listId = b.lists.first?.id ?? "" }
     }
 
     /// Parser input: every board, with lists/labels/members where loaded.
@@ -165,8 +175,15 @@ final class QuickAddState {
         busy = true
         defer { busy = false }
         do {
-            var board = details[key]
-            if board == nil { board = try await a.api.board(boardId); details[key] = board }
+            var board = details[key] ?? a.sync.boards[boardId]
+            if board == nil {
+                guard app.requireOnline(a) else { return false }
+                let started = Date()
+                let b = try await a.api.board(boardId)
+                a.sync.store(board: b, fetchStarted: started)
+                board = b
+                details[key] = b
+            }
             guard let board else { return false }
             let list = r.listId ?? (key == boardKey && board.lists.contains { $0.id == listId } ? listId : board.lists.first?.id)
             guard let list else { error = "\(board.name) has no lists."; return false }
@@ -175,21 +192,29 @@ final class QuickAddState {
             // and they apply to every card.
             let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let titles = lines.count > 1 ? [r.title] + lines.dropFirst() : [r.title]
-            var last: Card?
+            // Queued like any other edit, so it works offline and lands in order once it syncs.
+            var last: String?
             for title in titles where !title.isEmpty {
-                let card = try await a.api.createCard(listId: list, title: title)
-                last = card
-                if let due = r.due { try await a.api.updateCard(card.id, .init(due: .some(due))) }
-                for l in r.labelIds { try await a.api.toggleLabel(card: card.id, label: l, on: true) }
-                for m in r.memberIds { try await a.api.toggleMember(card: card.id, user: m, on: true) }
+                let id = TempID.make()
+                last = id
+                a.sync.perform(.createCard(id: id, listId: list, title: title, atTop: false), board: boardId)
+                if let due = r.due {
+                    a.sync.perform(.updateCard(id: id, patch: .init(due: .some(due)), base: .init(due: .some(nil))), board: boardId)
+                }
+                for l in r.labelIds {
+                    if let label = board.label(l) { a.sync.perform(.setLabel(cardId: id, label: label, on: true, was: false), board: boardId) }
+                }
+                for m in r.memberIds {
+                    if let user = board.member(m)?.user { a.sync.perform(.setMember(cardId: id, user: user, on: true, was: false), board: boardId) }
+                }
             }
             UserDefaults.standard.set("\(key)|\(list)", forKey: "hackban:quickadd:last")
-            app.boardModel(account: a, boardId: boardId).scheduleReload()
             let listName = board.lists.first { $0.id == list }?.name ?? ""
-            app.flash(titles.count > 1 ? "Added \(titles.count) cards to \(board.name) › \(listName)" : "Added to \(board.name) › \(listName)")
+            let later = a.sync.isOffline ? " It'll sync when you're back online." : ""
+            app.flash((titles.count > 1 ? "Added \(titles.count) cards to \(board.name) › \(listName)." : "Added to \(board.name) › \(listName).") + later)
             if open, let last {
                 NSApp.activate(ignoringOtherApps: true)
-                app.open(card: last.id, in: a, board: boardId)
+                app.open(card: last, in: a, board: boardId)
             }
             text = ""
             error = nil

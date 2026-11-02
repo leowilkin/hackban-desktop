@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import HackbanKit
+import Network
 import Observation
 import SwiftUI
 import UserNotifications
@@ -40,6 +41,7 @@ final class AppModel {
 
     @ObservationIgnored private var boardModels: [String: BoardModel] = [:]
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private let pathMonitor = NWPathMonitor()
     private let defaults = UserDefaults.standard
 
     var visibleAccounts: [Account] { accounts.filter { !$0.config.hidden } }
@@ -48,6 +50,7 @@ final class AppModel {
     init() {
         let configs = (try? JSONDecoder().decode([AccountConfig].self, from: defaults.data(forKey: "hackban:accounts") ?? Data())) ?? []
         accounts = configs.map { Account(config: $0, credentials: Keychain.load($0.id)) }
+        for a in accounts { wire(a) }
     }
 
     func account(_ id: String) -> Account? { accounts.first { $0.id == id } }
@@ -68,10 +71,12 @@ final class AppModel {
                 await existing.tokens.set(creds)
                 existing.signedOut = false
                 await existing.refresh()
+                existing.sync.resume()
             } else {
                 let config = AccountConfig(id: UUID().uuidString, server: server, label: label.isEmpty ? (server.host ?? "Hackban") : label, colorIndex: accounts.count)
                 Keychain.save(config.id, creds)
                 let a = Account(config: config, credentials: creds)
+                wire(a)
                 accounts.append(a)
                 save()
                 await a.refresh()
@@ -89,6 +94,7 @@ final class AppModel {
             a.signedOut = false
             a.lastError = nil
             await a.refresh()
+            a.sync.resume()
         } catch {
             if (error as? HackbanError) != .cancelled { flash(error.localizedDescription) }
         }
@@ -104,6 +110,7 @@ final class AppModel {
 
     func remove(_ a: Account) async {
         await signOut(a)
+        a.sync.wipe()
         accounts.removeAll { $0.id == a.id }
         boardModels = boardModels.filter { $0.value.account.id != a.id }
         save()
@@ -133,6 +140,8 @@ final class AppModel {
 
     func start() {
         Task { await refreshAll() }
+        for a in accounts { a.sync.resume() }
+        startNetworkMonitor()
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -163,7 +172,7 @@ final class AppModel {
     }
 
     func pollNotifications() async {
-        for a in visibleAccounts where !a.signedOut {
+        for a in visibleAccounts where !a.signedOut && !a.sync.isOffline {
             await a.refreshNotifications()
             let seen = Set(defaults.stringArray(forKey: seenKey(a)) ?? [])
             let fresh = a.notifications.filter { !$0.read && !seen.contains($0.id) }
@@ -216,11 +225,82 @@ final class AppModel {
 
     /// Run a mutation, reporting failures as a toast.
     func run(_ account: Account, _ op: @escaping () async throws -> Void) {
+        guard requireOnline(account) else { return }
         Task {
             do { try await op() } catch {
                 account.handle(error)
-                if (error as? HackbanError) != .cancelled { flash(error.localizedDescription) }
+                if (error as? HackbanError) != .cancelled { flash(message(for: error)) }
             }
+        }
+    }
+
+    /// What to say about a failed request.
+    func message(for error: Error) -> String {
+        Reachability.classify(error) == .offline ? "Can't reach the server. Changes that work offline are kept until it's back." : error.localizedDescription
+    }
+
+    /// False (with a toast) when the account is offline, for things that need the server.
+    func requireOnline(_ account: Account) -> Bool {
+        guard account.sync.isOffline else { return true }
+        flash("You're offline. That needs a connection to \(account.host).")
+        return false
+    }
+
+    // MARK: offline
+
+    private func wire(_ a: Account) {
+        a.sync.onConnectivity = { [weak self, weak a] online in
+            guard let self, let a else { return }
+            self.connectivityChanged(a, online: online)
+        }
+        a.sync.onSynced = { [weak self, weak a] boardId, cardId, refresh in
+            guard let self, let a else { return }
+            self.synced(a, boardId: boardId, cardId: cardId, refresh: refresh)
+        }
+        a.sync.onMessage = { [weak self] in self?.flash($0) }
+    }
+
+    /// Live updates stop while a server's unreachable, and reconnect (refetching what's open) when it's back.
+    private func connectivityChanged(_ a: Account, online: Bool) {
+        let models = boardModels.values.filter { $0.account === a }
+        if online {
+            for m in models {
+                m.reconnect()
+                m.openCard?.scheduleReload()
+            }
+            Task {
+                await a.refresh()
+                updateBadge()
+            }
+        } else {
+            for m in models { m.stopLive() }
+        }
+    }
+
+    /// A queued change reached the server: refetch what it changed, for the parts the server works out
+    /// (positions, counts, a repeating card's next date). Our own changes don't come back over live updates.
+    private func synced(_ a: Account, boardId: String, cardId: String?, refresh: Bool) {
+        guard let m = boardModels["\(a.id)|\(boardId)"] else { return }
+        if refresh { m.scheduleReload(after: 600) }
+        if let cardId, let open = m.openCard, open.id == cardId { open.scheduleReload(after: 400) }
+    }
+
+    private func startNetworkMonitor() {
+        pathMonitor.pathUpdateHandler = { path in
+            let up = path.status == .satisfied
+            Task { @MainActor in AppModel.shared.networkChanged(up: up) }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "hackban.network"))
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor in AppModel.shared.networkChanged(up: true) }
+        }
+    }
+
+    /// No network: every account is offline. Network back (or the app came to the front): check the
+    /// offline ones now instead of at their next backoff.
+    func networkChanged(up: Bool) {
+        for a in accounts where !a.signedOut {
+            if up { a.sync.probeNow() } else { a.sync.goOffline() }
         }
     }
 }

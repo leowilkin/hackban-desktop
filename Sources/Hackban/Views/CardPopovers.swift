@@ -41,14 +41,8 @@ struct CardSidebar: View {
                 button("Send to board", "arrow.uturn.backward") { model.update(.init(closed: false)) }
                 button("Delete", "trash") {
                     confirm = ConfirmAction(title: "Delete card?", message: "All actions will be removed from the activity feed and you won't be able to re-open the card. There is no undo.", button: "Delete") {
-                        let bm = model.boardModel
-                        Task {
-                            do {
-                                try await model.api.deleteCard(card.id)
-                                bm?.scheduleReload()
-                                dismiss()
-                            } catch { app.flash(error.localizedDescription) }
-                        }
+                        model.delete()
+                        dismiss()
                     }
                 }
             } else {
@@ -479,7 +473,9 @@ struct MoveCardPanel: View {
         .frame(width: 300)
         .task(id: boardId) {
             guard !boardId.isEmpty else { return }
-            target = try? await model.api.board(boardId)
+            // What's been downloaded first, so moving within a board works offline.
+            target = model.sync.boards[boardId]
+            if !model.sync.isOffline, let fresh = try? await model.api.board(boardId) { target = fresh }
             if !(target?.lists.contains { $0.id == listId } ?? false) { listId = target?.lists.first?.id ?? "" }
             let cards = target?.lists.first { $0.id == listId }?.openCards.filter { $0.id != card.id } ?? []
             position = min(position, cards.count)
@@ -498,6 +494,13 @@ struct MoveCardPanel: View {
         let api = model.api
         let id = card.id
         let bm = model.boardModel
+        // Within the same board it's an ordinary move, which works offline.
+        if !copy, let bm, boardId == bm.boardId {
+            bm.moveCard(id, toList: listId, onBoard: boardId, position: position)
+            done()
+            return
+        }
+        guard app.requireOnline(model.account) else { return }
         Task {
             do {
                 if copy {
