@@ -43,6 +43,8 @@ struct BoardScreen: View {
     private func content(_ board: Board) -> some View {
         ZStack {
             BoardBackground(background: board.background, bgImage: board.bgImage, account: model.account).ignoresSafeArea()
+            VStack(spacing: 0) {
+            if model.filters.isActive { filterBar(board) }
             ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: 10) {
                     ForEach(board.lists) { list in
@@ -58,6 +60,7 @@ struct BoardScreen: View {
                 .padding(12)
                 .frame(maxHeight: .infinity, alignment: .top)
             }
+            }
         }
         .navigationTitle(board.name)
         .navigationSubtitle(subtitle(board))
@@ -69,6 +72,46 @@ struct BoardScreen: View {
         .onKeyPress(phases: .down) { press in handleKey(press, board) }
         .inspector(isPresented: $showMenu) { BoardInspector(model: model) { showMenu = false } }
         .sheet(isPresented: $showShare) { ShareBoardView(model: model).environment(app) }
+    }
+
+    /// Says what's filtered and how to undo it, so a hidden card is never a mystery.
+    private func filterBar(_ board: Board) -> some View {
+        let shown = board.lists.reduce(0) { $0 + model.visibleCards(in: $1).count }
+        let total = board.lists.reduce(0) { $0 + $1.openCards.count }
+        return HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal.decrease.circle.fill")
+            Text("Showing \(shown) of \(total) cards").bold()
+            Text(filterSummary(board)).foregroundStyle(.secondary).lineLimit(1)
+            Spacer()
+            Button("Edit") { showFilters = true }
+            Button("Clear") { model.filters = CardFilters() }
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.regularMaterial)
+    }
+
+    private func filterSummary(_ board: Board) -> String {
+        let f = model.filters
+        var parts: [String] = []
+        if !f.query.isEmpty { parts.append("“\(f.query)”") }
+        for m in f.members.sorted() {
+            if m == "none" { parts.append("no members") }
+            else if m == model.account.me { parts.append("assigned to me") }
+            else if let u = board.member(m)?.user { parts.append(u.displayName) }
+        }
+        for l in f.labels.sorted() {
+            if l == "none" { parts.append("no labels") }
+            else if let label = board.labels.first(where: { $0.id == l }) { parts.append(label.name.isEmpty ? (label.color ?? "label") : label.name) }
+        }
+        for d in CardFilters.Due.allCases where f.due.contains(d) { parts.append(d.title.lowercased()) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// True while a text field in the key window has keyboard focus.
+    private var isEditingText: Bool {
+        NSApp.keyWindow?.firstResponder is NSTextView
     }
 
     @ToolbarContentBuilder
@@ -163,6 +206,8 @@ struct BoardScreen: View {
 
     /// The web app's hover shortcuts.
     private func handleKey(_ press: KeyPress, _ board: Board) -> KeyPress.Result {
+        // Never steal letters from a text field (card composer, list title, filter keyword…).
+        if isEditingText { return .ignored }
         let key = press.characters
         if key == "w" { showMenu.toggle(); return .handled }
         if key == "q" {

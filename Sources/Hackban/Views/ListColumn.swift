@@ -110,6 +110,13 @@ struct ListColumn: View {
                     }
             }
             if composing && !composeAtTop { composer }
+            let hidden = list.openCards.count - cards.count
+            if hidden > 0 {
+                Text("\(hidden) hidden by filters")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+            }
         }
         .padding(.horizontal, 8)
         .padding(.bottom, 4)
