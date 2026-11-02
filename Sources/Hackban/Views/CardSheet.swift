@@ -56,6 +56,11 @@ struct CardSheet: View {
                 .lineLimit(1)
                 AccountTag(account: model.account)
                 if card.closed { Text("Archived").font(.caption.bold()).padding(.horizontal, 5).background(Color.orange.opacity(0.3), in: Capsule()) }
+                if model.sync.isOffline {
+                    Label("Offline", systemImage: "icloud.slash").font(.caption.bold()).padding(.horizontal, 5)
+                        .background(Color.secondary.opacity(0.18), in: Capsule())
+                        .help("Changes are saved on this Mac and sync when \(model.account.host) is back.")
+                }
                 Spacer()
                 Button { model.toggleWatch() } label: { Image(systemName: card.watching == true ? "eye.fill" : "eye") }
                     .help(card.watching == true ? "Stop watching" : "Watch: get notified of comments on this card")
@@ -78,6 +83,12 @@ struct CardSheet: View {
                             Text(card.title).font(.title2.weight(.semibold))
                         }
                         DescriptionSection(card: card, canEdit: canEdit) { model.update(.init(description: $0)) }
+                        if model.sync.isOffline && model.detailsMissing {
+                            Label("This card's checklists, attachments and comments haven't been downloaded yet. They'll show when you're back online. Anything you add now syncs then.", systemImage: "icloud.slash")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         if canEdit { addRow(card) }
                         ForEach(card.checklists ?? []) { cl in
                             ChecklistSection(model: model, checklist: cl, canEdit: canEdit)

@@ -60,7 +60,7 @@ struct BoardScreen: View {
             }
         }
         .navigationTitle(board.name)
-        .navigationSubtitle(board.workspace?.name ?? "")
+        .navigationSubtitle(subtitle(board))
         .toolbar { toolbar(board) }
         .focusable()
         .focusEffectDisabled()
@@ -98,6 +98,18 @@ struct BoardScreen: View {
             .popover(isPresented: $showFilters) { FilterPopover(model: model) }
             Button { showMenu.toggle() } label: { Label("Inspector", systemImage: "sidebar.trailing") }.help("Board inspector (w)")
         }
+        if model.sync.hasStatus {
+            ToolbarItem { SyncStatusButton(account: model.account) }
+        }
+    }
+
+    /// The workspace, and when it's offline, how old what's showing is.
+    private func subtitle(_ board: Board) -> String {
+        let workspace = board.workspace?.name ?? ""
+        guard model.sync.isOffline else { return workspace }
+        var offline = "Offline"
+        if let at = model.sync.boardFetchedAt[board.id] { offline += ", updated \(at.formatted(.relative(presentation: .named)))" }
+        return workspace.isEmpty ? offline : "\(workspace) · \(offline)"
     }
 
     @ViewBuilder

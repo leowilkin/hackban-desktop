@@ -42,6 +42,12 @@ once.
   and there are explicit board/list pickers too. `↩` adds, `⌘↩` adds and opens the card, pasting several lines
   adds one card per line. Parsing can be turned off, and the destination can be fixed or follow the last
   board you used.
+- **Offline mode.** Boards and cards you've opened are kept on this Mac, per server, so they open without a
+  connection (the window says "Offline, updated …"). Most edits work offline: card title, description, dates,
+  complete, repeat, cover colour, labels, members, watch, move and reorder, archive, delete, checklists and their
+  items, comments, links, and list create, rename, colour, reorder, archive and sort. They wait on the Mac and sync
+  in order when the server's back. The sidebar and toolbar show what's waiting and what couldn't sync, and settle
+  conflicts. Uploads, copying, moving to another board, board settings and sharing need a connection.
 - **Menu bar extra** with quick add, what's due in the next three days, and unread notifications.
 - **Native notifications** for Hackban notifications (comments on watched cards, being added to a card),
   and an unread count on the Dock icon.
@@ -120,11 +126,20 @@ insists the two match), and after losing the key everyone has to download the ne
   bearer token.
 - **Live updates**: an open board subscribes to `board.onEvent` over SSE and refetches when someone else
   changes it. Your own changes are applied optimistically and skipped when they echo back.
+- **Offline**: every edit that can work offline goes through a per-account queue
+  (`Sources/HackbanKit/OfflineQueue.swift`) and is sent in order, online or not. What you see is the last server
+  snapshot with the queue applied on top. Things made offline get temporary ids, swapped for the server's as their
+  creates land. A create that may have reached the server before the connection dropped is looked for before
+  it's sent again, so nothing's made twice. If someone else changed a card's title or description meanwhile,
+  theirs stays and yours is kept as a conflict to settle; other fields take your change. A server counts as
+  offline when the network's down or requests can't reach it, and is probed with backoff until it answers.
+  Snapshots and the queue live in `~/Library/Application Support/Hackban/Offline/<account>/`.
 - **Layout**:
   - `Sources/HackbanKit`: Foundation-only core (superjson, tRPC client, OAuth, SSE, models, API, filters,
     sorts, activity text, quick-add parser). Builds and tests on Linux too.
   - `Sources/Hackban`: the SwiftUI app (models, views, quick-add panel, global hotkey, Keychain).
-  - `Tests/HackbanKitTests`: wire format, token refresh, model decoding, filters and the quick-add parser.
+  - `Tests/HackbanKitTests`: wire format, token refresh, model decoding, filters, the quick-add parser, and
+    offline replay against a fake server.
 
 ```sh
 swift test

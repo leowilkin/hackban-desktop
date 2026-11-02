@@ -53,6 +53,12 @@ public struct BoardRef: Codable, Hashable, Sendable {
     public var name: String
     public var background: String?
     public var bgImage: String?
+    public init(id: String?, name: String, background: String? = nil, bgImage: String? = nil) {
+        self.id = id
+        self.name = name
+        self.background = background
+        self.bgImage = bgImage
+    }
 }
 
 public struct Label: Codable, Hashable, Identifiable, Sendable {
@@ -117,6 +123,12 @@ public struct ListRef: Codable, Hashable, Sendable {
     public var name: String
     public var boardId: String?
     public var board: BoardRef?
+    public init(id: String?, name: String, boardId: String?, board: BoardRef?) {
+        self.id = id
+        self.name = name
+        self.boardId = boardId
+        self.board = board
+    }
 }
 
 public struct CheckItem: Codable, Hashable, Identifiable, Sendable {
@@ -289,6 +301,22 @@ public struct Card: Codable, Hashable, Identifiable, Sendable {
         if let checkTotal { return (checkDone ?? 0, checkTotal) }
         let items = (checklists ?? []).flatMap(\.items)
         return (items.filter(\.complete).count, items.count)
+    }
+}
+
+extension Card {
+    /// A card made on this device that the server hasn't seen yet.
+    init(localId id: String, listId: String, title: String) {
+        self.id = id
+        self.listId = listId
+        self.title = title
+        description = ""
+        pos = ""
+        dueComplete = false
+        closed = false
+        labels = []
+        members = []
+        watching = false
     }
 }
 

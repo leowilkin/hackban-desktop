@@ -12,6 +12,16 @@ struct AccountConfig: Codable, Identifiable, Hashable {
     var hidden: Bool = false
 }
 
+/// What's kept on disk so the sidebar, Home and My Cards work offline.
+struct AccountSnapshot: Codable, Sendable {
+    var profile: Profile?
+    var workspaces: [Workspace]
+    var guestBoards: [BoardSummary]
+    var recent: [BoardSummary]
+    var notifications: [HackbanNotification]
+    var myCards: [Card]
+}
+
 /// One signed-in Hackban server.
 @MainActor
 @Observable
@@ -20,6 +30,8 @@ final class Account: Identifiable {
     var config: AccountConfig
     let api: HackbanAPI
     let tokens: TokenManager
+    /// Offline snapshots and the changes waiting to sync.
+    let sync: SyncEngine
 
     var profile: Profile?
     var workspaces: [Workspace] = []
@@ -44,7 +56,23 @@ final class Account: Identifiable {
         let http = URLSessionHTTP()
         tokens = TokenManager(credentials: credentials, http: http) { Keychain.save(id, $0) }
         api = HackbanAPI(client: TRPCClient(server: config.server, tokens: tokens, http: http))
+        sync = SyncEngine(accountId: id, api: api)
         signedOut = credentials == nil
+        sync.account = self
+        if let (s, _) = sync.store.load(AccountSnapshot.self, "account.json") {
+            profile = s.profile
+            workspaces = s.workspaces
+            guestBoards = s.guestBoards
+            recent = s.recent
+            notifications = s.notifications
+            myCards = s.myCards
+            loaded = true
+        }
+    }
+
+    private func saveSnapshot() {
+        let s = AccountSnapshot(profile: profile, workspaces: workspaces, guestBoards: guestBoards, recent: recent, notifications: notifications, myCards: myCards)
+        sync.store.save(s, "account.json")
     }
 
     /// Every board this account can open, for pickers.
@@ -55,7 +83,7 @@ final class Account: Identifiable {
     var starredBoards: [BoardSummary] { allBoards.map(\.board).filter { $0.starred == true } }
 
     func refresh() async {
-        guard !signedOut else { return }
+        guard !signedOut, !sync.isOffline else { return }
         do {
             async let p = api.profile()
             async let w = api.workspaces()
@@ -69,24 +97,45 @@ final class Account: Identifiable {
             notifications = try await n
             lastError = nil
             loaded = true
+            saveSnapshot()
         } catch {
             handle(error)
         }
     }
 
     func refreshNotifications() async {
-        guard !signedOut else { return }
-        do { notifications = try await api.notifications() } catch { handle(error) }
+        guard !signedOut, !sync.isOffline else { return }
+        do {
+            notifications = try await api.notifications()
+            saveSnapshot()
+        } catch {
+            handle(error)
+        }
     }
 
     func refreshMyCards() async {
-        guard !signedOut else { return }
-        do { myCards = try await api.myCards() } catch { handle(error) }
+        guard !signedOut, !sync.isOffline else { return }
+        do {
+            myCards = try await api.myCards()
+            saveSnapshot()
+        } catch {
+            handle(error)
+        }
     }
 
+    /// Records a failed request: can't reach the server → offline; revoked tokens → signed out.
     func handle(_ error: Error) {
-        if let e = error as? HackbanError, e.isAuthFailure { signedOut = true }
-        if (error as? HackbanError) == .cancelled { return }
+        switch Reachability.classify(error) {
+        case .offline:
+            sync.goOffline()
+            return
+        case .cancelled:
+            return
+        case .signedOut:
+            signedOut = true
+        default:
+            break
+        }
         lastError = error.localizedDescription
     }
 }

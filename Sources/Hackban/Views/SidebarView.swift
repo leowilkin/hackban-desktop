@@ -51,6 +51,7 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .top, spacing: 0) { header }
+        .safeAreaInset(edge: .bottom, spacing: 0) { syncStatus }
         .sheet(item: $creatingBoard) { n in CreateBoardView(account: n.account, workspaceId: n.workspaceId).environment(app) }
         .sheet(item: $creatingWorkspace) { a in CreateWorkspaceView(account: a).environment(app) }
     }
@@ -92,6 +93,20 @@ struct SidebarView: View {
         .padding(.horizontal, 14)
         .padding(.top, 6)
         .padding(.bottom, 10)
+    }
+
+    /// How each server's sync is going, only while there's something to say (offline, waiting, failed).
+    @ViewBuilder
+    private var syncStatus: some View {
+        let accounts = app.visibleAccounts.filter(\.sync.hasStatus)
+        if !accounts.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(accounts) { SyncStatusRow(account: $0) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+        }
     }
 
     /// Grey icons, as in Linear's sidebar, rather than accent-coloured ones.
@@ -173,6 +188,7 @@ private struct AccountSections: View {
             if several { Circle().fill(account.color).frame(width: 8, height: 8) }
             Text(title).lineLimit(1)
             if several && title != account.config.label { Text(account.config.label).foregroundStyle(.tertiary).lineLimit(1) }
+            if account.sync.isOffline { Image(systemName: "icloud.slash").foregroundStyle(.secondary).help("Offline: can't reach \(account.host)") }
             // Next to the title rather than trailing: the collapse chevron only shows on hover and takes the
             // trailing edge, which pushed a trailing button sideways.
             Menu { items } label: {

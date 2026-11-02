@@ -210,7 +210,7 @@ struct ListColumn: View {
         let title = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         draft = ""
         guard !title.isEmpty else { return }
-        Task { _ = await model.addCard(to: list.id, title: title, atTop: composeAtTop) }
+        model.addCard(to: list.id, title: title, atTop: composeAtTop)
         composerFocused = true
     }
 }
@@ -298,6 +298,11 @@ struct CardFront: View {
                         .background(Color(hex: "#f5cd47"), in: RoundedRectangle(cornerRadius: 3))
                         .help("Blocking " + card.blockingTitles.joined(separator: ", "))
                 }
+                if model.sync.failedCardIds.contains(card.id) {
+                    Image(systemName: "exclamationmark.icloud").foregroundStyle(.orange).help("Some changes to this card couldn't sync")
+                } else if model.sync.isOffline && model.sync.pendingCardIds.contains(card.id) {
+                    Image(systemName: "icloud.and.arrow.up").help("Changed while offline. It'll sync when you're back online.")
+                }
                 if card.watching == true { Image(systemName: "eye").help("You're watching this card") }
                 DueBadge(card: card) { if model.canEdit { model.updateCard(card.id, .init(dueComplete: !card.dueComplete)) } }
                 if !card.description.isEmpty { Image(systemName: "text.alignleft").help("This card has a description") }
@@ -321,6 +326,7 @@ struct CardFront: View {
 extension CardFront {
     func hasAnyBadge(total: Int, members: [User]) -> Bool {
         if card.due != nil || card.watching == true || !card.description.isEmpty { return true }
+        if model.sync.failedCardIds.contains(card.id) || (model.sync.isOffline && model.sync.pendingCardIds.contains(card.id)) { return true }
         if card.commentCount > 0 || card.attachmentCount > 0 || total > 0 { return true }
         return card.isBlocked || card.isBlocking || !members.isEmpty
     }

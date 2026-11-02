@@ -234,8 +234,9 @@ private struct ArchivedTab: View {
     }
 
     private func act(_ op: @escaping () async throws -> Void) {
+        guard app.requireOnline(model.account) else { return }
         Task {
-            do { try await op() } catch { app.flash(error.localizedDescription) }
+            do { try await op() } catch { app.flash(app.message(for: error)) }
             await reload()
             await model.load()
         }

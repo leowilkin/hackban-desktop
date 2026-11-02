@@ -2,7 +2,11 @@ import Foundation
 import HackbanKit
 import Observation
 
-/// One open board: its data, live updates and every board-level mutation (applied optimistically).
+/// One open board: live updates and every board-level change.
+///
+/// The board itself comes from the account's `SyncEngine`: the last server snapshot with changes still
+/// waiting to sync on top. Changes that work offline are queued there (`perform`). The rest need a
+/// connection: they're applied to the snapshot at once and sent, and the board is refetched if they fail.
 @MainActor
 @Observable
 final class BoardModel {
@@ -10,7 +14,6 @@ final class BoardModel {
     let account: Account
     let boardId: String
 
-    var board: Board?
     var loadError: String?
     var filters = CardFilters()
     var deleted = false
@@ -22,6 +25,8 @@ final class BoardModel {
     @ObservationIgnored private var viewers = 0
 
     var api: HackbanAPI { account.api }
+    var sync: SyncEngine { account.sync }
+    var board: Board? { sync.boards[boardId] }
     var canEdit: Bool { board?.canEdit ?? false }
 
     init(app: AppModel, account: Account, boardId: String) {
@@ -32,44 +37,69 @@ final class BoardModel {
 
     // MARK: loading & live updates
 
+    static let notDownloaded = "This board hasn't been downloaded yet. It'll load when you're back online."
+
     func load() async {
+        sync.loadCachedBoard(boardId)
+        guard !sync.isOffline else {
+            if board == nil { loadError = Self.notDownloaded }
+            return
+        }
+        let started = Date()
         do {
-            board = try await api.board(boardId)
+            sync.store(board: try await api.board(boardId), fetchStarted: started)
             loadError = nil
         } catch {
             if let e = error as? HackbanError, case .server(let code, _, _) = e, code == "NOT_FOUND" || code == "FORBIDDEN" { deleted = true }
             account.handle(error)
-            loadError = error.localizedDescription
+            loadError = sync.isOffline ? (board == nil ? Self.notDownloaded : nil) : error.localizedDescription
         }
     }
 
-    /// Called by each view showing the board; the stream runs while at least one is visible.
+    /// Called by each view showing the board; the stream runs while at least one is visible and the
+    /// server can be reached.
     func appear() {
         viewers += 1
-        if board == nil { Task { await load() } }
-        guard liveTask == nil else { return }
-        let client = account.client
-        let id = boardId
-        liveTask = Task { [weak self] in
-            for await event in client.boardEvents(boardId: id) {
-                guard let self else { return }
-                if let event {
-                    if event.origin == client.clientId { continue }
-                    if event.kind == "deleted" { self.deleted = true }
-                    if let cardId = event.cardId, self.openCard?.cardId == cardId { self.openCard?.scheduleReload() }
-                }
-                self.scheduleReload()
-            }
-        }
+        sync.loadCachedBoard(boardId)
+        if board == nil || sync.isOffline { Task { await load() } }
+        startLive()
     }
 
     func disappear() {
         viewers -= 1
         if viewers <= 0 {
             viewers = 0
-            liveTask?.cancel()
-            liveTask = nil
+            stopLive()
         }
+    }
+
+    private func startLive() {
+        guard liveTask == nil, viewers > 0, !sync.isOffline else { return }
+        let client = account.client
+        let id = boardId
+        liveTask = Task { [weak self] in
+            // Yields nil on every (re)connect, which refetches whatever was missed.
+            for await event in client.boardEvents(boardId: id) {
+                guard let self else { return }
+                if let event {
+                    if event.origin == client.clientId { continue }
+                    if event.kind == "deleted" { self.deleted = true }
+                    if let cardId = event.cardId, self.openCard?.id == cardId { self.openCard?.scheduleReload() }
+                }
+                self.scheduleReload()
+            }
+        }
+    }
+
+    func stopLive() {
+        liveTask?.cancel()
+        liveTask = nil
+    }
+
+    /// Back online: reconnect live updates, which refetch the board as they connect.
+    func reconnect() {
+        stopLive()
+        if viewers > 0 { startLive() }
     }
 
     func scheduleReload(after ms: UInt64 = 250) {
@@ -81,19 +111,20 @@ final class BoardModel {
         }
     }
 
-    /// Apply a change locally now, send it, and reload from the server if it fails.
+    /// Queue a change that works offline.
+    func perform(_ change: Change) { sync.perform(change, board: boardId) }
+
+    /// A change that needs a connection: applied locally now, sent, and the board refetched if it fails.
     func mutate(reload: Bool = false, _ local: (inout Board) -> Void = { _ in }, _ remote: @escaping () async throws -> Void) {
-        if var b = board {
-            local(&b)
-            board = b
-        }
+        guard app.requireOnline(account) else { return }
+        sync.editSnapshot(boardId, local)
         Task {
             do {
                 try await remote()
                 if reload { scheduleReload(after: 50) }
             } catch {
                 account.handle(error)
-                app.flash(error.localizedDescription)
+                app.flash(app.message(for: error))
                 await load()
             }
         }
@@ -102,19 +133,14 @@ final class BoardModel {
     // MARK: lookups
 
     func card(_ id: String) -> Card? {
-        guard let b = board, let (li, ci) = b.list(containing: id) else { return nil }
+        guard let b = board, let (li, ci) = b.list(containing: sync.resolve(id)) else { return nil }
         return b.lists[li].openCards[ci]
     }
 
-    func list(_ id: String) -> BoardList? { board?.lists.first { $0.id == id } }
+    func list(_ id: String) -> BoardList? { board?.lists.first { $0.id == sync.resolve(id) } }
 
     func visibleCards(in list: BoardList) -> [Card] {
         filters.isActive ? list.openCards.filter { filters.matches($0) } : list.openCards
-    }
-
-    private func editCard(_ id: String, in b: inout Board, _ f: (inout Card) -> Void) {
-        guard let (li, ci) = b.list(containing: id) else { return }
-        f(&b.lists[li].cards![ci])
     }
 
     // MARK: board
@@ -127,8 +153,10 @@ final class BoardModel {
             if let v = patch.bgImage { b.bgImage = v }
             if let v = patch.visibility { b.visibility = v }
             if let v = patch.closed { b.closed = v }
-        }) { [api, boardId] in try await api.updateBoard(boardId, patch) }
-        if patch.name != nil || patch.closed != nil { Task { await account.refresh() } }
+        }) { [api, boardId, account] in
+            try await api.updateBoard(boardId, patch)
+            if patch.name != nil || patch.closed != nil { await account.refresh() }
+        }
     }
 
     func toggleStar() {
@@ -142,30 +170,27 @@ final class BoardModel {
     // MARK: lists
 
     func addList(_ name: String) {
-        mutate(reload: true) { [api, boardId] in _ = try await api.createList(boardId: boardId, name: name) }
+        perform(.createList(id: TempID.make(), name: name))
     }
 
     func renameList(_ id: String, _ name: String) {
-        mutate({ b in if let i = b.lists.firstIndex(where: { $0.id == id }) { b.lists[i].name = name } }) { [api] in try await api.updateList(id, name: name) }
+        perform(.updateList(id: id, patch: .init(name: name)))
     }
 
     func setListColor(_ id: String, _ color: String?) {
-        mutate({ b in if let i = b.lists.firstIndex(where: { $0.id == id }) { b.lists[i].color = color } }) { [api] in try await api.updateList(id, color: .some(color)) }
+        perform(.updateList(id: id, patch: .init(color: .some(color))))
     }
 
     func archiveList(_ id: String) {
-        mutate({ $0.lists.removeAll { $0.id == id } }) { [api] in try await api.updateList(id, closed: true) }
+        perform(.updateList(id: id, patch: .init(closed: true)))
     }
 
     /// Put list `id` right before `beforeId` (nil = at the end).
     func moveList(_ id: String, before beforeId: String?) {
-        guard let b = board, let from = b.lists.firstIndex(where: { $0.id == id }), id != beforeId else { return }
-        var lists = b.lists
-        let moving = lists.remove(at: from)
-        let to = beforeId.flatMap { bid in lists.firstIndex { $0.id == bid } } ?? lists.count
-        let afterId = to > 0 ? lists[to - 1].id : nil
-        lists.insert(moving, at: to)
-        mutate({ $0.lists = lists }) { [api] in try await api.moveList(id, afterId: afterId) }
+        guard let b = board, b.lists.contains(where: { $0.id == id }), id != beforeId else { return }
+        let others = b.lists.map(\.id).filter { $0 != id }
+        let to = beforeId.flatMap { others.firstIndex(of: $0) } ?? others.count
+        perform(.moveList(id: id, above: Anchors.above(to, in: others)))
     }
 
     func moveListToBoard(_ id: String, board target: String) {
@@ -187,10 +212,7 @@ final class BoardModel {
 
     func sortList(_ id: String, by sort: CardSort) {
         guard let l = list(id) else { return }
-        let sorted = sort.sorted(l.openCards)
-        mutate({ b in if let i = b.lists.firstIndex(where: { $0.id == id }) { b.lists[i].cards = sorted } }) { [api] in
-            try await api.sortCards(id, ids: sorted.map(\.id))
-        }
+        perform(.sortList(id: l.id, cardIds: sort.sorted(l.openCards).map(\.id)))
     }
 
     func archiveAllCards(in id: String) {
@@ -203,50 +225,24 @@ final class BoardModel {
 
     // MARK: cards
 
-    func addCard(to listId: String, title: String, atTop: Bool = false) async -> Card? {
-        do {
-            let c = try await api.createCard(listId: listId, title: title, after: atTop ? .some(nil) : nil)
-            var front = c
-            front.labels = []
-            front.members = []
-            front.watching = false
-            if var b = board, let i = b.lists.firstIndex(where: { $0.id == listId }) {
-                if atTop { b.lists[i].cards = [front] + b.lists[i].openCards } else { b.lists[i].cards = b.lists[i].openCards + [front] }
-                board = b
-            }
-            scheduleReload(after: 500)
-            return c
-        } catch {
-            account.handle(error)
-            app.flash(error.localizedDescription)
-            return nil
-        }
+    /// Adds a card (straight away, even offline) and returns its id, temporary until it syncs.
+    @discardableResult
+    func addCard(to listId: String, title: String, atTop: Bool = false) -> String {
+        let id = TempID.make()
+        perform(.createCard(id: id, listId: listId, title: title, atTop: atTop))
+        return id
     }
 
     func updateCard(_ id: String, _ patch: HackbanAPI.CardPatch) {
-        let completingRepeat = patch.dueComplete == true && card(id)?.recurrence != nil
-        mutate(reload: completingRepeat || patch.closed != nil, { b in
-            if patch.closed == true {
-                for i in b.lists.indices { b.lists[i].cards?.removeAll { $0.id == id } }
-            } else {
-                editCard(id, in: &b) { patch.apply(to: &$0) }
-            }
-        }) { [api] in try await api.updateCard(id, patch) }
-        openCard?.applyLocal(patch)
+        sync.updateCard(id, patch, board: boardId)
     }
 
     /// Move card `id` into `listId`, right before `beforeId` (nil = at the end).
     func moveCard(_ id: String, to listId: String, before beforeId: String?) {
-        guard var b = board, let (li, ci) = b.list(containing: id), id != beforeId,
-              let ti = b.lists.firstIndex(where: { $0.id == listId }) else { return }
-        var card = b.lists[li].cards!.remove(at: ci)
-        card.listId = listId
-        var target = b.lists[ti].openCards
-        let at = beforeId.flatMap { bid in target.firstIndex { $0.id == bid } } ?? target.count
-        let afterId = at > 0 ? target[at - 1].id : nil
-        target.insert(card, at: at)
-        b.lists[ti].cards = target
-        mutate({ $0 = b }) { [api] in try await api.moveCard(id, listId: listId, afterId: afterId) }
+        guard let b = board, b.list(containing: id) != nil, id != beforeId, let target = b.lists.first(where: { $0.id == listId }) else { return }
+        let others = target.openCards.map(\.id).filter { $0 != id }
+        let at = beforeId.flatMap { others.firstIndex(of: $0) } ?? others.count
+        perform(.moveCard(id: id, listId: listId, above: Anchors.above(at, in: others)))
     }
 
     func moveCard(_ id: String, toList listId: String, onBoard boardId: String, position: Int?) {
@@ -274,34 +270,23 @@ final class BoardModel {
     func toggleLabel(card id: String, label: Label) {
         guard let c = card(id) else { return }
         let on = !c.labelIds.contains(label.id)
-        mutate({ b in
-            editCard(id, in: &b) { c in
-                if on { c.labels = (c.labels ?? []) + [CardLabel(cardId: id, labelId: label.id, label: label)] }
-                else { c.labels?.removeAll { $0.labelId == label.id } }
-            }
-        }) { [api] in try await api.toggleLabel(card: id, label: label.id, on: on) }
-        openCard?.scheduleReload()
+        perform(.setLabel(cardId: c.id, label: label, on: on, was: !on))
     }
 
     func toggleMember(card id: String, user: User) {
         guard let c = card(id) else { return }
         let on = !c.memberIds.contains(user.id)
-        mutate({ b in
-            editCard(id, in: &b) { c in
-                if on { c.members = (c.members ?? []) + [CardMember(cardId: id, userId: user.id, user: user)] }
-                else { c.members?.removeAll { $0.userId == user.id } }
-            }
-        }) { [api] in try await api.toggleMember(card: id, user: user.id, on: on) }
-        openCard?.scheduleReload()
+        perform(.setMember(cardId: c.id, user: user, on: on, was: !on))
     }
 
     func toggleWatch(card id: String) {
-        let on = !(card(id)?.watching ?? false)
-        mutate({ b in editCard(id, in: &b) { $0.watching = on } }) { [api] in try await api.watchCard(id, on) }
+        guard let c = card(id) else { return }
+        let on = !(c.watching ?? false)
+        perform(.watch(cardId: c.id, on: on, was: !on))
     }
 
     func deleteCard(_ id: String) {
-        mutate({ b in for i in b.lists.indices { b.lists[i].cards?.removeAll { $0.id == id } } }) { [api] in try await api.deleteCard(id) }
+        perform(.deleteCard(id: id))
     }
 
     func copyCard(_ id: String, title: String, listId: String, keep: HackbanAPI.CopyKeep) {
@@ -311,12 +296,14 @@ final class BoardModel {
     // MARK: labels
 
     func createLabel(name: String, color: String?) async -> Label? {
+        guard app.requireOnline(account) else { return nil }
         do {
             let l = try await api.createLabel(boardId: boardId, name: name, color: color)
-            board?.labels.append(l)
+            sync.editSnapshot(boardId) { $0.labels.append(l) }
             return l
         } catch {
-            app.flash(error.localizedDescription)
+            account.handle(error)
+            app.flash(app.message(for: error))
             return nil
         }
     }

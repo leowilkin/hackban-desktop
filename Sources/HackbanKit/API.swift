@@ -316,10 +316,11 @@ public struct HackbanAPI: Sendable {
     public func deleteLabel(_ id: String) async throws { try await client.mutate("card.deleteLabel", ["id": .string(id)]) }
 
     // Checklists
-    public func addChecklist(card: String, name: String, copyFrom: String? = nil) async throws {
+    @discardableResult
+    public func addChecklist(card: String, name: String, copyFrom: String? = nil) async throws -> Created {
         var o: [String: JSONValue] = ["id": .string(card), "name": .string(name)]
         if let copyFrom { o["copyFrom"] = .string(copyFrom) }
-        try await client.mutate("card.addChecklist", .object(o))
+        return try await client.mutate("card.addChecklist", .object(o))
     }
 
     public func renameChecklist(_ id: String, name: String) async throws {
@@ -348,7 +349,10 @@ public struct HackbanAPI: Sendable {
     public func deleteCheckItem(_ id: String) async throws { try await client.mutate("card.deleteCheckItem", ["itemId": .string(id)]) }
 
     // Comments
-    public func addComment(card: String, text: String) async throws { try await client.mutate("card.addComment", ["id": .string(card), "text": .string(text)]) }
+    @discardableResult
+    public func addComment(card: String, text: String) async throws -> Created {
+        try await client.mutate("card.addComment", ["id": .string(card), "text": .string(text)])
+    }
     public func editComment(_ id: String, text: String) async throws { try await client.mutate("card.editComment", ["commentId": .string(id), "text": .string(text)]) }
     public func deleteComment(_ id: String) async throws { try await client.mutate("card.deleteComment", ["commentId": .string(id)]) }
 
