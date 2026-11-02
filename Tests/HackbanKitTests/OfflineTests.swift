@@ -736,3 +736,75 @@ final class ReplayTests: XCTestCase {
         XCTAssertEqual(q.pending.count, 1)
     }
 }
+
+final class IdentityGateTests: XCTestCase {
+    func testNothingIsSentUntilTheCurrentTokensAreConfirmed() {
+        // At launch the cached profile says who this is, but that's not confirmed with the tokens.
+        var g = IdentityGate(cacheOwner: "u1")
+        XCTAssertEqual(g.send(madeBy: "u1"), .hold)
+        XCTAssertTrue(g.showsCache, "offline at launch, what's kept still shows")
+        XCTAssertEqual(g.confirm("u1"), .same)
+        XCTAssertEqual(g.send(madeBy: "u1"), .send)
+    }
+
+    func testChangesWithNoKnownMakerAreNeverSent() {
+        var g = IdentityGate()
+        XCTAssertEqual(g.send(madeBy: nil), .hold)
+        g.confirm("u1")
+        XCTAssertEqual(g.send(madeBy: nil), .unknownMaker)
+    }
+
+    func testChangesMadeAsSomeoneElseAreNeverSent() {
+        var g = IdentityGate(cacheOwner: "u1")
+        g.confirm("u1")
+        XCTAssertEqual(g.send(madeBy: "u2"), .wrongUser)
+    }
+
+    func testANewSignInHidesAndHoldsUntilConfirmed() {
+        var g = IdentityGate(cacheOwner: "u1")
+        g.confirm("u1")
+        g.beginSignIn()
+        // The old confirmation (and the cached id) no longer count.
+        XCTAssertNil(g.verified)
+        XCTAssertEqual(g.send(madeBy: "u1"), .hold)
+        XCTAssertFalse(g.showsCache)
+        // Couldn't confirm (offline, server error): still held and hidden.
+        XCTAssertEqual(g.send(madeBy: "u1"), .hold)
+        XCTAssertFalse(g.showsCache)
+        XCTAssertEqual(g.confirm("u1"), .same)
+        XCTAssertTrue(g.showsCache)
+        XCTAssertEqual(g.send(madeBy: "u1"), .send)
+    }
+
+    func testSigningInAsSomeoneElseForgetsTheCache() {
+        var g = IdentityGate(cacheOwner: "u1")
+        g.beginSignIn()
+        XCTAssertEqual(g.confirm("u2"), .someoneElse)
+        XCTAssertEqual(g.send(madeBy: "u1"), .wrongUser)
+        XCTAssertEqual(g.send(madeBy: "u2"), .send)
+    }
+
+    func testANewSignInOverDataOfUnknownOwnershipForgetsIt() {
+        var g = IdentityGate()
+        g.beginSignIn()
+        XCTAssertEqual(g.confirm("u2"), .someoneElse)
+        // A brand new account with nothing kept has nothing to forget.
+        var fresh = IdentityGate()
+        XCTAssertEqual(fresh.confirm("u2"), .same)
+    }
+
+    func testAConfirmationForSomeoneElseWithoutASignInStillCounts() {
+        // The tokens changed under us somehow: the data kept for the old user isn't the new one's.
+        var g = IdentityGate(cacheOwner: "u1")
+        g.confirm("u1")
+        XCTAssertEqual(g.confirm("u2"), .someoneElse)
+    }
+
+    func testSigningOutForgetsEverything() {
+        var g = IdentityGate(cacheOwner: "u1")
+        g.confirm("u1")
+        g.reset()
+        XCTAssertEqual(g, IdentityGate())
+        XCTAssertEqual(g.send(madeBy: "u1"), .hold)
+    }
+}

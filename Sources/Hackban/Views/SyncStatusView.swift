@@ -15,7 +15,12 @@ struct SyncSummary {
         let pending = sync.pendingCount
         let failed = sync.queue.failed.count
         let changes = pending == 1 ? "1 change" : "\(pending) changes"
-        if sync.isOffline {
+        if !sync.identity.showsCache {
+            title = "Checking who's signed in…"
+            detail = "Nothing saved on this Mac for \(account.host) is shown or sent until the server confirms the new sign-in."
+            symbol = "person.crop.circle.badge.questionmark"
+            attention = false
+        } else if sync.isOffline {
             let since = sync.offlineSince.map { " since \($0.formatted(date: .omitted, time: .shortened))" } ?? ""
             title = "Offline\(since)"
             detail = pending > 0
