@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build Hackban.app from the Swift package: build/Hackban.app
 #   UNIVERSAL=1       build for Apple silicon and Intel
-#   SIGN_IDENTITY=…   codesign identity (default: ad-hoc "-")
+#   SIGN_IDENTITY=…   codesign identity (default: "Hackban Release" if it's in your keychains, else ad-hoc "-")
+#   SIGN_KEYCHAIN=…   only look for the identity in this keychain file (CI imports it into a temporary one)
 #   BUILD_NUMBER=…    CFBundleVersion, which the updater compares against releases (default 0: a local build,
 #                     which doesn't check for updates on its own)
 set -euo pipefail
@@ -37,5 +38,13 @@ xcrun actool Resources/Assets.xcassets --compile "$app/Contents/Resources" --pla
 [[ -f Resources/AppIcon.icns ]] && cp Resources/AppIcon.icns "$app/Contents/Resources/" && \
   /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$app/Contents/Info.plist" >/dev/null
 
-codesign --force --deep --sign "${SIGN_IDENTITY:--}" "$app"
-echo "Built $app"
+# Signed with the same certificate every time, the keychain trusts the signer rather than one build's hash, so it
+# doesn't ask again after every update. Ad hoc otherwise. See "Signing" in the README.
+identity="${SIGN_IDENTITY:-}"
+if [[ -z "$identity" ]] && security find-identity -p codesigning 2>/dev/null | grep -q '"Hackban Release"'; then
+  identity="Hackban Release"
+fi
+sign=(--force --deep --sign "${identity:--}")
+[[ -n "${SIGN_KEYCHAIN:-}" ]] && sign+=(--keychain "$SIGN_KEYCHAIN")
+codesign "${sign[@]}" "$app"
+echo "Built $app (signed ${identity:-ad hoc})"

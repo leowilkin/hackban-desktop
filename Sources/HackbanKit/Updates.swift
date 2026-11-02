@@ -4,6 +4,7 @@ import FoundationNetworking
 #endif
 #if os(macOS)
 import CryptoKit
+import Security
 #endif
 
 /// A build of the app on GitHub. CI publishes every build of `main` as a release tagged `build-<run number>`,
@@ -91,11 +92,10 @@ public enum AppInstaller {
 
     /// Downloads the zipped app at `archive`, checks the zip is signed by `publicKey` (base64 of a raw Ed25519 key)
     /// with the signature at `signature`, that the app inside is `bundleIdentifier` at `build` with an intact code
-    /// signature, and swaps it in for `app`. Nothing changes if any step fails.
+    /// signature from the same signer as `app`, and swaps it in for `app`. Nothing changes if any step fails.
     ///
-    /// The app is ad-hoc signed, so its code signature only shows it arrived intact, not who built it; the zip's
-    /// signature is what ties it to CI. Without a `publicKey` (a build with no `HackbanUpdatePublicKey`) the zip isn't
-    /// checked.
+    /// The zip's signature is what ties a download to CI. Without a `publicKey` (a build with no
+    /// `HackbanUpdatePublicKey`) the zip isn't checked. See `checkSameSigner` for the code signature.
     public static func install(from archive: URL, signature: URL?, publicKey: String?, build: Int, bundleIdentifier: String,
                                replacing app: URL, session: URLSession = .shared) async throws {
         // Before the app download, so an unsigned release fails straight away.
@@ -137,7 +137,31 @@ public enum AppInstaller {
         do { try await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", new.path]) } catch {
             throw Failure("The download is damaged: its code signature doesn't check out.")
         }
+        try checkSameSigner(new, as: app)
         _ = try fm.replaceItemAt(app, withItemAt: new)
+    }
+
+    /// When `app` is signed with a certificate, `new` has to meet its designated requirement, i.e. come from the same
+    /// signer. An ad-hoc signed app has no certificate and its requirement is its own hash, which no other build can
+    /// meet, so the check starts with the first certificate-signed build; the zip's signature covers the step there.
+    static func checkSameSigner(_ new: URL, as app: URL) throws {
+        var current: SecStaticCode?
+        var info: CFDictionary?
+        guard SecStaticCodeCreateWithPath(app as CFURL, [], &current) == errSecSuccess, let current,
+              SecCodeCopySigningInformation(current, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess else {
+            throw Failure("Couldn't read this app's own code signature.")
+        }
+        let certificates = (info as? [String: Any])?[kSecCodeInfoCertificates as String] as? [SecCertificate] ?? []
+        if certificates.isEmpty { return }
+
+        var requirement: SecRequirement?
+        var candidate: SecStaticCode?
+        let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSCheckNestedCode | kSecCSStrictValidate)
+        guard SecCodeCopyDesignatedRequirement(current, [], &requirement) == errSecSuccess,
+              SecStaticCodeCreateWithPath(new as CFURL, [], &candidate) == errSecSuccess, let candidate,
+              SecStaticCodeCheckValidity(candidate, flags, requirement) == errSecSuccess else {
+            throw Failure("The download isn't signed by the same certificate as this app.")
+        }
     }
 
     static func run(_ tool: String, _ arguments: [String]) async throws {

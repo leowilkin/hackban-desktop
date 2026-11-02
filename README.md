@@ -76,8 +76,9 @@ UNIVERSAL=1 ./Scripts/bundle.sh
 
 Or open `Package.swift` in Xcode and run the `Hackban` scheme. Notifications, open-at-login and Liquid Glass
 need the bundled app (`Scripts/bundle.sh`), not `swift run`: plain `swift build` records the deployment target
-as the SDK version, so macOS shows the pre-26 design. The app is ad-hoc signed, so the first launch needs
-right-click → Open, and macOS may ask once per build to let it read its Keychain item.
+as the SDK version, so macOS shows the pre-26 design. The app isn't notarized, so the first launch needs
+right-click → Open. Unless it's signed with the release certificate (see [Code signing](#code-signing)), macOS
+also asks once per build to let it read its Keychain item.
 
 CI (`.github/workflows/build.yml`) runs the tests and builds `Hackban.app` on macOS for every push, and
 uploads it as an artifact. Builds of `main` are also published as GitHub releases tagged `build-<run number>`,
@@ -90,8 +91,8 @@ after launch and every six hours, and offers newer builds: Install and Relaunch 
 it's signed with the update key, that it's Hackban at that build with an intact code signature, swaps it in for
 the running copy and reopens it. Turn the automatic checks off in Settings → General; Hackban → Check for
 Updates… works either way, and on a local build offers the latest release. Hackban has to be somewhere it can
-write to, such as /Applications. Each release is a new ad-hoc signature, so after an update macOS asks once more
-to let Hackban read its Keychain item.
+write to, such as /Applications. Releases signed with the release certificate update without the Keychain asking;
+ad-hoc ones make macOS ask once more after each update.
 
 ### Signed releases
 
@@ -113,6 +114,35 @@ Put the public key in `Resources/Info.plist` as `HackbanUpdatePublicKey`, keep t
 such as a password manager, and delete the file. Installed copies only trust the key they shipped with: changing
 keys takes one release that carries the new public key but is signed with the old private key (by hand, since CI
 insists the two match), and after losing the key everyone has to download the next build by hand.
+
+### Code signing
+
+The Keychain lets an app read the items it saved without asking only while the app still meets the requirement
+recorded with them. An ad-hoc signature's requirement is that one build's hash, so every new build asks again.
+Releases are signed with a self-signed certificate called `Hackban Release` instead. The requirement is then that
+certificate, which every build shares, so after the first certificate-signed build macOS stops asking. The updater
+holds updates to it too: once the running app is signed with a certificate, it only installs builds that meet the
+running app's designated requirement, so a build signed by anyone else, or ad hoc, is refused.
+
+CI imports the certificate from two secrets into a throwaway keychain. Without them it signs ad hoc and warns.
+To make the certificate (once, on your own machine):
+
+1. Keychain Access → Certificate Assistant → Create a Certificate…: name `Hackban Release`, Identity Type
+   Self-Signed Root, Certificate Type Code Signing. Tick "Let me override defaults" and give it a long validity
+   period (say 7300 days), since signatures from an expired certificate stop checking out.
+2. In Keychain Access → My Certificates, right-click `Hackban Release` → Export… and save a .p12 with a password.
+3. Add both as secrets and delete the file:
+
+   ```sh
+   base64 -i ~/HackbanRelease.p12 | gh secret set HACKBAN_SIGNING_P12
+   gh secret set HACKBAN_SIGNING_P12_PASSWORD
+   rm ~/HackbanRelease.p12
+   ```
+
+`Scripts/bundle.sh` signs with `Hackban Release` whenever it's in your keychains (or with `SIGN_IDENTITY`), so
+local builds match releases and switching between them doesn't ask either. Keep the certificate and its key in a
+password manager: installed copies only take updates signed with it, so after losing it everyone has to download
+the next build by hand.
 
 ## How it works
 

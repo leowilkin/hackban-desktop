@@ -16,6 +16,27 @@ jobs:
         run: swift --version && xcodebuild -version
       - name: Test HackbanKit
         run: swift test
+      # Every build signed with the same self-signed certificate, so the keychain doesn't ask again after each update
+      # (see "Signing" in the README). It goes into a throwaway keychain that only bundle.sh's codesign reads.
+      # Without the secrets (forks, or before they're set up) the build is signed ad hoc.
+      - name: Signing certificate
+        env:
+          P12: ${{ secrets.HACKBAN_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.HACKBAN_SIGNING_P12_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then echo "::warning::No HACKBAN_SIGNING_P12 secret, so this build is signed ad hoc."; exit 0; fi
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          pw="$(uuidgen)"
+          security create-keychain -p "$pw" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$pw" "$kc"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pw" "$kc" > /dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          echo "SIGN_IDENTITY=Hackban Release" >> "$GITHUB_ENV"
+          echo "SIGN_KEYCHAIN=$kc" >> "$GITHUB_ENV"
       - name: Build Hackban.app
         run: ./Scripts/bundle.sh
         env:
