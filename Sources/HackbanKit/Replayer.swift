@@ -82,6 +82,9 @@ public struct Replayer: Sendable {
         case .addLink(_, let cardId, let url, _):
             guard let c = card, c.id == cardId else { return nil }
             return (c.attachments ?? []).filter { $0.url == url }.map(\.id).reversed()
+        case .trackIssue(_, let cardId, let ref):
+            guard let c = card, c.id == cardId else { return nil }
+            return c.trackedIssues.filter { $0.ref == ref }.map(\.id)
         default:
             return nil
         }
@@ -153,12 +156,13 @@ public struct Replayer: Sendable {
     private func gone(_ change: Change) -> String {
         switch change {
         case .createCard, .createList, .updateList, .moveList, .sortList: return "The list was deleted or archived by someone else."
-        case .addChecklist, .addComment, .addLink, .updateCard, .moveCard, .setLabel, .setMember, .watch, .deleteCard:
+        case .addChecklist, .addComment, .addLink, .trackIssue, .updateCard, .moveCard, .setLabel, .setMember, .watch, .deleteCard:
             return "The card was deleted, or you no longer have access to it."
         case .renameChecklist, .deleteChecklist, .addCheckItem: return "The checklist was deleted by someone else."
         case .updateCheckItem, .moveCheckItem, .deleteCheckItem: return "The checklist item was deleted by someone else."
         case .editComment, .deleteComment: return "The comment was deleted."
         case .renameAttachment, .deleteAttachment: return "The attachment was deleted by someone else."
+        case .untrackIssue: return "The issue was already removed from the card."
         }
     }
 
@@ -230,6 +234,12 @@ public struct Replayer: Sendable {
         case .renameAttachment(let id, _, let name): try await api.renameAttachment(id, name: name)
         case .deleteAttachment(let id, _): try await api.deleteAttachment(id)
 
+        case .trackIssue(_, let cardId, let ref):
+            // Tracking an issue that's already on the card is a no-op on the server, so the lookup is exact.
+            try await api.trackIssue(card: cardId, url: ref.url.absoluteString)
+            return .done(createdId: try await findAfterCreate(op, cardId: cardId, mapped: mapped))
+        case .untrackIssue(let id, _): try await api.untrackIssue(id)
+
         case .createList(_, let name):
             return .done(createdId: try await api.createList(boardId: op.boardId, name: name).id)
         case .updateList(let id, let p): try await api.updateList(id, name: p.name, color: p.color, closed: p.closed)
@@ -249,7 +259,7 @@ extension Change {
     var isOnCardDetail: Bool {
         switch self {
         case .renameChecklist, .deleteChecklist, .addCheckItem, .updateCheckItem, .moveCheckItem, .deleteCheckItem,
-             .editComment, .deleteComment, .renameAttachment, .deleteAttachment:
+             .editComment, .deleteComment, .renameAttachment, .deleteAttachment, .untrackIssue:
             return true
         default: return false
         }
@@ -266,10 +276,11 @@ extension Change {
 }
 
 extension Card {
-    /// Whether one of its checklists, check items, comments or attachments has this id.
+    /// Whether one of its checklists, check items, comments, attachments or tracked issues has this id.
     func contains(_ id: String) -> Bool {
         (checklists ?? []).contains { $0.id == id || $0.items.contains { $0.id == id } }
             || (comments ?? []).contains { $0.id == id }
             || (attachments ?? []).contains { $0.id == id }
+            || trackedIssues.contains { $0.id == id }
     }
 }

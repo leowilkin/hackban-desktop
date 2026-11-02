@@ -93,6 +93,9 @@ struct CardSheet: View {
                         ForEach(card.checklists ?? []) { cl in
                             ChecklistSection(model: model, checklist: cl, canEdit: canEdit)
                         }
+                        if !card.trackedIssues.isEmpty {
+                            GitHubIssuesSection(model: model, card: card, canEdit: canEdit)
+                        }
                         if let atts = card.attachments, !atts.isEmpty {
                             AttachmentsSection(model: model, card: card, canEdit: canEdit, importing: $importing)
                         }
@@ -130,7 +133,7 @@ struct CardSheet: View {
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { model.upload(urls: urls) }
         }
-        .onPasteCommand(of: [.fileURL, .png, .tiff, .jpeg]) { _ in pasteFiles() }
+        .onPasteCommand(of: [.fileURL, .png, .tiff, .jpeg, .utf8PlainText, .url]) { _ in paste() }
     }
 
     /// Add a checklist or attachment, under the description, like Linear's "Add sub-issues".
@@ -149,11 +152,13 @@ struct CardSheet: View {
         .controlSize(.small)
     }
 
-    /// ⌘V with files or an image on the clipboard attaches them.
-    private func pasteFiles() {
+    /// ⌘V with files or an image on the clipboard attaches them; with a GitHub issue link, tracks the issue.
+    private func paste() {
         guard canEdit else { return }
         let pb = NSPasteboard.general
-        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+        if model.card?.tracksIssues == true, let text = pb.string(forType: .string), let ref = GitHubIssueRef.parse(text) {
+            model.trackIssue(ref)
+        } else if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
             model.upload(urls: urls)
         } else if let img = NSImage(pasteboard: pb), let tiff = img.tiffRepresentation,
                   let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
@@ -455,6 +460,102 @@ struct AttachmentsSection: View {
 
     private func open(_ a: Attachment) {
         Task { if let url = await model.open(a) { NSWorkspace.shared.open(url) } }
+    }
+}
+
+// MARK: GitHub issues
+
+/// Octicon-style issue marker: green while open, brand blue once closed, grey when it can't be read.
+struct IssueStateIcon: View {
+    let issue: GitHubIssue
+    var size: CGFloat = 16
+
+    static func color(_ i: GitHubIssue) -> Color {
+        if i.isUnreadable { return .secondary }
+        return i.isClosed ? Color(hex: "#0c66e4") : Color(hex: "#1f845a")
+    }
+
+    static func status(_ i: GitHubIssue) -> String {
+        if i.isUnreadable { return "Can't read this issue" }
+        if i.isClosed {
+            var s = "Closed"
+            if i.stateReason == "not_planned" { s += " as not planned" }
+            if let by = i.closedBy, !by.isEmpty { s += " by @\(by)" }
+            if let at = i.closedAt { s += " \(at.relative)" }
+            return s
+        }
+        return i.checkedAt == nil ? "Not checked yet" : "Open"
+    }
+
+    var body: some View {
+        Image(systemName: issue.isClosed ? "checkmark.circle" : "smallcircle.filled.circle")
+            .font(.system(size: size))
+            .foregroundStyle(Self.color(issue))
+    }
+}
+
+struct GitHubIssuesSection: View {
+    let model: CardModel
+    let card: Card
+    let canEdit: Bool
+    @State private var github: GitHubStatus?
+
+    private var unreadable: Bool { card.trackedIssues.contains(where: \.isUnreadable) }
+
+    var body: some View {
+        let issues = card.trackedIssues
+        VStack(alignment: .leading, spacing: 10) {
+            Label("GitHub issues", systemImage: "smallcircle.filled.circle").font(.headline)
+            Text(issues.count > 1 ? "This card is marked complete when all of these issues are closed." : "This card is marked complete when this issue is closed.")
+                .font(.caption).foregroundStyle(.secondary)
+            ForEach(issues) { i in row(i) }
+            if unreadable {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("An issue here can't be read: it may be in a private repo, deleted, or a pull request.")
+                    if let gh = github, gh.available, gh.connection == nil {
+                        Button("Connect your GitHub account in the browser to track issues in private repos you can see.") {
+                            NSWorkspace.shared.open(model.account.client.webURL("/me"))
+                        }
+                        .buttonStyle(.link)
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .task(id: unreadable) {
+            guard unreadable, !model.sync.isOffline else { return }
+            github = try? await model.api.github()
+        }
+    }
+
+    private func row(_ i: GitHubIssue) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            IssueStateIcon(issue: i, size: 18).padding(.top, 1).help(IssueStateIcon.status(i))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(i.displayTitle).bold().lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(i.label)
+                    Text("·")
+                    Text(IssueStateIcon.status(i))
+                    if let at = i.checkedAt, !i.isUnreadable {
+                        Text("·")
+                        Text("Checked \(at.relative)").help(at.formatted())
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    Button("Open on GitHub") { NSWorkspace.shared.open(i.url) }
+                    Button("Refresh") { model.refreshIssue(i.id) }
+                        .disabled(model.sync.isOffline)
+                        .help("Check the issue on GitHub now instead of waiting for the next poll")
+                    if canEdit { Button("Remove") { model.untrackIssue(i.id) } }
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { NSWorkspace.shared.open(i.url) }
     }
 }
 

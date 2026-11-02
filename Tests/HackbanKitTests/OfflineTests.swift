@@ -11,6 +11,8 @@ private let urgent = Label(id: "l1", boardId: "b1", name: "Urgent", color: "red"
 private let sam = User(id: "u2", name: "Sam Example")
 private let me = User(id: "u1", name: "Pat Example")
 
+private let issue4 = GitHubIssueRef(owner: "hackclub", repo: "hackban", number: 4)
+
 private func makeBoard() -> Board {
     Board(id: "b1", name: "Launch", description: nil, workspaceId: "w1", background: "#0079bf", bgImage: nil, visibility: "workspace",
           closed: false, inviteRole: nil, inviteToken: nil, createdAt: nil, updatedAt: nil, workspace: nil, members: [], labels: [urgent],
@@ -47,6 +49,7 @@ final class OfflineModelTests: XCTestCase {
             op(.updateList(id: "li1", patch: .init(color: .some(nil)))),
             op(.addComment(id: TempID.make(), cardId: "c1", text: "hi", author: me, at: due)),
             op(.addLink(id: TempID.make(), cardId: "c1", url: "https://example.com", name: nil)),
+            op(.trackIssue(id: TempID.make(), cardId: "c1", issue: issue4)),
             op(.setLabel(cardId: "c1", label: urgent, on: true, was: false)),
         ]
         var q = OfflineQueue(userId: "u1")
@@ -120,6 +123,9 @@ final class OfflineModelTests: XCTestCase {
             .addComment(id: "local:m", cardId: "c1", text: "first", author: me, at: at),
             .addLink(id: "local:a", cardId: "c1", url: "https://example.com", name: "Spec"),
             .renameAttachment(id: "local:a", cardId: "c1", name: "The spec"),
+            .trackIssue(id: "local:g1", cardId: "c1", issue: issue4),
+            .trackIssue(id: "local:g2", cardId: "c1", issue: GitHubIssueRef(owner: "hackclub", repo: "hackban", number: 5)),
+            .untrackIssue(id: "local:g2", cardId: "c1"),
             .addComment(id: "local:other", cardId: "c9", text: "not this card", author: me, at: at),
         ]
         for ch in changes { ch.apply(to: &c) }
@@ -131,6 +137,12 @@ final class OfflineModelTests: XCTestCase {
         XCTAssertEqual(c.checklists?.first?.items.last?.memberId, "u2")
         XCTAssertEqual(c.comments?.map(\.text), ["first"])
         XCTAssertEqual(c.attachments?.first?.name, "The spec")
+        XCTAssertEqual(c.trackedIssues.map(\.id), ["local:g1"])
+        XCTAssertEqual(c.trackedIssues[0].state, "open")
+        XCTAssertNil(c.trackedIssues[0].checkedAt, "not fetched until it syncs")
+        // The same issue again (say, from the server's copy) isn't doubled.
+        Change.trackIssue(id: "gi1", cardId: "c1", issue: issue4).apply(to: &c)
+        XCTAssertEqual(c.trackedIssues.count, 1)
         Change.deleteChecklist(id: "local:k", cardId: "c1").apply(to: &c)
         XCTAssertEqual(c.checklists, [])
     }
@@ -200,6 +212,10 @@ final class OfflineQueueTests: XCTestCase {
         q.enqueue(op(.moveCard(id: "c1", listId: "li1", above: ["local:c", "c2"])))
         q.enqueue(op(.deleteCard(id: "local:c")))
         XCTAssertEqual(q.pending.map(\.change), [.moveCard(id: "c1", listId: "li1", above: ["c2"])])
+        // Likewise an issue tracked and untracked before either reached the server.
+        q.enqueue(op(.trackIssue(id: "local:g", cardId: "c1", issue: issue4)))
+        q.enqueue(op(.untrackIssue(id: "local:g", cardId: "c1")))
+        XCTAssertEqual(q.pending.count, 1)
     }
 
     func testNothingFoldsIntoAChangeThatMayHaveBeenSent() {
@@ -348,6 +364,7 @@ final class FakeHackban: HTTP, @unchecked Sendable {
     var board = makeBoard()
     var checklists: [String: [Checklist]] = [:]
     var comments: [String: [Comment]] = [:]
+    var issues: [String: [GitHubIssue]] = [:]
     /// Procedures called, in order.
     var calls: [String] = []
     var offline = false
@@ -413,6 +430,7 @@ final class FakeHackban: HTTP, @unchecked Sendable {
         c.checklists = checklists[id] ?? []
         c.comments = comments[id] ?? []
         c.attachments = []
+        c.issues = issues[id] ?? []
         return c
     }
 
@@ -490,6 +508,21 @@ final class FakeHackban: HTTP, @unchecked Sendable {
             let m = Comment(id: newId("m"), cardId: s("id")!, authorId: me.id, text: s("text")!, createdAt: Date(), editedAt: nil, author: me)
             comments[m.cardId, default: []].insert(m, at: 0)
             return ok(m)
+
+        case "card.trackIssue":
+            guard front(s("id")!) != nil, let ref = GitHubIssueRef.parse(s("url")!) else { return notFound }
+            // Like the server's upsert: tracking the same issue twice is one issue.
+            if !(issues[s("id")!] ?? []).contains(where: { $0.ref == ref }) {
+                issues[s("id")!, default: []].append(GitHubIssue(id: newId("g"), cardId: s("id")!, ref: ref, title: "Fetched title"))
+            }
+            return done
+
+        case "card.untrackIssue":
+            for (cardId, list) in issues where list.contains(where: { $0.id == s("issueId") }) {
+                issues[cardId]!.removeAll { $0.id == s("issueId") }
+                return done
+            }
+            return (500, #"{"error":{"json":{"message":"No GitHubIssue found","data":{"code":"INTERNAL_SERVER_ERROR","httpStatus":500}}}}"#)
 
         case "card.deleteComment":
             for (cardId, list) in comments where list.contains(where: { $0.id == s("commentId") }) {
@@ -611,6 +644,28 @@ final class ReplayTests: XCTestCase {
         XCTAssertEqual(cards.map(\.title), ["Draft"])
         XCTAssertEqual(cards[0].labelIds, ["l1"])
         XCTAssertEqual(q.ids["local:c"], cards[0].id)
+    }
+
+    func testTrackedIssueGetsItsServerIdAndCanBeUntracked() async {
+        var q = OfflineQueue(userId: me.id)
+        q.enqueue(op(.trackIssue(id: "local:g", cardId: "c1", issue: issue4)))
+        var snapshot: Board? = server.board
+        // The answer to the track is lost: on retry it's found on the card, not tracked again.
+        server.dropAfter = "card.trackIssue"
+        await drain(&q, snapshot: &snapshot)
+        XCTAssertNotNil(q.pending[0].sentAt)
+        await drain(&q, snapshot: &snapshot)
+        XCTAssertTrue(q.isEmpty)
+        XCTAssertEqual(server.count("card.trackIssue"), 1)
+        let tracked = server.issues["c1"]!
+        XCTAssertEqual(tracked.map(\.label), ["hackclub/hackban#4"])
+        XCTAssertEqual(q.ids["local:g"], tracked[0].id)
+
+        // Untracking by the temp id reaches the server as the real one.
+        q.enqueue(op(.untrackIssue(id: "local:g", cardId: "c1")))
+        await drain(&q, snapshot: &snapshot)
+        XCTAssertTrue(q.isEmpty)
+        XCTAssertEqual(server.issues["c1"], [])
     }
 
     func testLostAnswerDoesntAdoptALookAlikeThatWasAlreadyThere() async {

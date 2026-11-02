@@ -53,7 +53,8 @@ public struct OfflineQueue: Codable, Equatable, Sendable {
     public mutating func enqueue(_ new: PendingOp) {
         var op = new
         switch op.change {
-        case .deleteCard(let id), .deleteChecklist(let id, _), .deleteCheckItem(let id, _), .deleteComment(let id, _), .deleteAttachment(let id, _):
+        case .deleteCard(let id), .deleteChecklist(let id, _), .deleteCheckItem(let id, _), .deleteComment(let id, _), .deleteAttachment(let id, _),
+             .untrackIssue(let id, _):
             // Made offline and never sent: as if it never happened.
             if unsentCreate(of: id) != nil {
                 drop(from: id)

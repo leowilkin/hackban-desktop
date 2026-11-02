@@ -318,6 +318,7 @@ struct ProfileView: View {
     @State private var name = ""
     @State private var username = ""
     @State private var apps: [ConnectedApp] = []
+    @State private var github: GitHubStatus?
     @State private var activity: [Activity] = []
     @State private var next: String?
     @State private var picking = false
@@ -341,6 +342,25 @@ struct ProfileView: View {
                 TextField("Username", text: $username, prompt: Text("2–32 lowercase letters, numbers or underscores"))
                 Button("Save") {
                     act { try await account.api.updateProfile(name: name, username: .some(username.isEmpty ? nil : username)) }
+                }
+            }
+            if let gh = github, gh.available {
+                Section("GitHub") {
+                    Text("Cards track GitHub issues you link to them and complete when the issue closes. Public issues work without this; connect your account to track issues in private repos you can see.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let c = gh.connection {
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text("@\(c.login)")
+                                if let d = c.createdAt { Text("Connected \(d.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(.secondary) }
+                            }
+                            Spacer()
+                            Button("Disconnect") { act { try await account.api.disconnectGithub() } }
+                        }
+                    } else {
+                        Button("Connect GitHub in Browser…") { NSWorkspace.shared.open(account.client.webURL("/me")) }
+                        Text("Connecting signs you in to GitHub on the web. This page catches up when you come back.").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             Section("Connected apps") {
@@ -370,7 +390,12 @@ struct ProfileView: View {
         }
         .task {
             apps = (try? await account.api.connectedApps()) ?? []
+            github = try? await account.api.github()
             await loadActivity(more: false)
+        }
+        // Back from connecting GitHub in the browser: show it.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { github = try? await account.api.github() }
         }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.png, .jpeg, .gif, .webP]) { result in
             guard case .success(let url) = result else { return }
@@ -393,6 +418,7 @@ struct ProfileView: View {
             do { try await op() } catch { app.flash(error.localizedDescription) }
             await account.refresh()
             apps = (try? await account.api.connectedApps()) ?? apps
+            github = try? await account.api.github()
         }
     }
 }

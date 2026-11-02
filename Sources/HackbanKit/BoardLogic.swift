@@ -174,6 +174,12 @@ public enum ActivityText {
         case "addBlocker": return "marked \(card) as blocked by \(s("name"))"
         case "removeBlocker": return "marked \(card) as no longer blocked by \(s("name"))"
         case "addAttachment": return "attached \(s("name")) to \(card)"
+        case "trackIssue": return "linked GitHub issue \(s("issue")) to \(card)"
+        case "untrackIssue": return "unlinked GitHub issue \(s("issue")) from \(card)"
+        case "githubIssueClosed":
+            let by = s("closedBy")
+            return "completed \(card) because GitHub issue \(s("issue")) was closed" + (by.isEmpty ? "" : " by @\(by)")
+        case "githubIssueReopened": return "reopened \(card) because GitHub issue \(s("issue")) was reopened"
         case "addMemberToBoard": return "added a member to this board"
         case "joinBoard": return "joined this board via invite link"
         case "archiveAllCards": return "archived all cards in a list"

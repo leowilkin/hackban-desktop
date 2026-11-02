@@ -21,6 +21,7 @@ final class ModelTests: XCTestCase {
           "members":[{"cardId":"c1","userId":"u1","user":{"id":"u1","name":"Leo Wilkin","image":null}}],
           "_count":{"comments":2,"attachments":1},
           "blockedBy":[{"blocker":{"title":"Design"}}],"blocking":[],
+          "issues":[{"id":"gi1","owner":"hackclub","repo":"hackban","number":4,"state":"open","title":"Track issues","fetchError":null}],
           "watching":true,"checkTotal":4,"checkDone":1,"coverUrl":null}]}],
       "inviteToken":"tok","starred":true,"myRole":"admin"
     },"meta":{"values":{"createdAt":["Date"]}}}}}
@@ -40,6 +41,9 @@ final class ModelTests: XCTestCase {
         XCTAssertTrue(c.isBlocked)
         XCTAssertFalse(c.isBlocking)
         XCTAssertEqual(c.watching, true)
+        XCTAssertTrue(c.tracksIssues)
+        XCTAssertEqual(c.trackedIssues.map(\.label), ["hackclub/hackban#4"])
+        XCTAssertFalse(c.trackedIssues[0].isClosed)
         XCTAssertTrue(b.isAdmin)
         XCTAssertEqual(Palette.backgroundStops(b.background), ["#0c66e4", "#37b4c3"])
         XCTAssertEqual(b.list(containing: "c1")?.cardIndex, 0)
@@ -59,7 +63,14 @@ final class ModelTests: XCTestCase {
         "comments":[{"id":"m1","cardId":"c1","authorId":"u1","text":"hey","trelloId":null,"createdAt":"2026-10-01T10:00:00.000Z","editedAt":null,
           "author":{"id":"u1","name":"Leo","image":null,"username":null}}],
         "activities":[{"id":"ac1","boardId":"b1","cardId":"c1","actorId":"u1","type":"changeDue","data":{"title":"T","due":"2026-11-02T17:00:00.000Z","recurrence":null},
-          "createdAt":"2026-10-01T10:00:00.000Z","actor":{"id":"u1","name":"Leo","image":null,"username":null}}],
+          "createdAt":"2026-10-01T10:00:00.000Z","actor":{"id":"u1","name":"Leo","image":null,"username":null}},
+          {"id":"ac2","boardId":"b1","cardId":"c1","actorId":"u1","type":"githubIssueClosed","data":{"title":"T","issue":"hackclub/hackban#4","closedBy":"octocat"},
+          "createdAt":"2026-10-02T10:00:00.000Z","actor":{"id":"u1","name":"Leo","image":null,"username":null}}],
+        "issues":[{"id":"gi1","cardId":"c1","owner":"hackclub","repo":"hackban","number":4,"title":"Track issues","state":"closed","stateReason":"completed",
+          "closedBy":"octocat","closedAt":"2026-10-02T09:00:00.000Z","checkedAt":"2026-10-02T09:30:00.000Z","fetchError":null,"completedCardAt":"2026-10-02T09:30:00.000Z",
+          "addedById":"u1","createdAt":"2026-10-01T10:00:00.000Z"},
+          {"id":"gi2","cardId":"c1","owner":"hackclub","repo":"secret","number":9,"title":"","state":"open","stateReason":null,"closedBy":null,"closedAt":null,
+          "checkedAt":"2026-10-02T09:30:00.000Z","fetchError":"not_found","completedCardAt":null,"addedById":null,"createdAt":"2026-10-01T10:00:00.000Z"}],
         "watching":false,
         "blockedBy":[{"id":"c2","title":"Design","dueComplete":false},{"id":"c3","title":"Done one","dueComplete":true}],
         "blocking":[{"id":"c4","title":"Ship","dueComplete":false}]
@@ -75,6 +86,33 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(c.list?.board?.name, "Launch")
         let a = c.activities![0]
         XCTAssertTrue(ActivityText.describe(a, onCard: true).hasPrefix("set this card to be due "))
+        XCTAssertEqual(ActivityText.describe(c.activities![1], onCard: true), "completed this card because GitHub issue hackclub/hackban#4 was closed by @octocat")
+        let issues = c.trackedIssues
+        XCTAssertEqual(issues.map(\.id), ["gi1", "gi2"])
+        XCTAssertTrue(issues[0].isClosed)
+        XCTAssertEqual(issues[0].closedAt, ISODate.parse("2026-10-02T09:00:00Z"))
+        XCTAssertEqual(issues[0].displayTitle, "Track issues")
+        XCTAssertEqual(issues[0].url.absoluteString, "https://github.com/hackclub/hackban/issues/4")
+        XCTAssertTrue(issues[1].isUnreadable)
+        XCTAssertEqual(issues[1].displayTitle, "hackclub/secret#9")
+    }
+
+    func testGitHubIssueLinksParse() {
+        XCTAssertEqual(GitHubIssueRef.parse("https://github.com/hackclub/hackban/issues/4"), GitHubIssueRef(owner: "hackclub", repo: "hackban", number: 4))
+        XCTAssertEqual(GitHubIssueRef.parse("  HTTP://www.github.com/a-b/c.d/issues/12/?x=1#top \n"), GitHubIssueRef(owner: "a-b", repo: "c.d", number: 12))
+        XCTAssertNil(GitHubIssueRef.parse("https://github.com/hackclub/hackban/pull/4"), "pull requests aren't tracked")
+        XCTAssertNil(GitHubIssueRef.parse("https://github.com/hackclub/hackban/issues"))
+        XCTAssertNil(GitHubIssueRef.parse("https://github.com/hackclub/hackban/issues/0"))
+        XCTAssertNil(GitHubIssueRef.parse("https://gitlab.com/hackclub/hackban/issues/4"))
+        XCTAssertNil(GitHubIssueRef.parse("https://github.com/hackclub/hackban/issues/4/comments"))
+        XCTAssertEqual(GitHubIssueRef(owner: "o", repo: "r", number: 7).label, "o/r#7")
+    }
+
+    func testCardWithoutIssuesFieldIsFromAnOlderServer() throws {
+        let b: Board = try TRPCClient.decode(Data(boardJSON.replacingOccurrences(of: #""issues":[{"id":"gi1","owner":"hackclub","repo":"hackban","number":4,"state":"open","title":"Track issues","fetchError":null}],"#, with: "").utf8), status: 200)
+        let c = b.lists[0].openCards[0]
+        XCTAssertFalse(c.tracksIssues)
+        XCTAssertEqual(c.trackedIssues, [])
     }
 
     func testNotificationsAndWorkspaces() throws {

@@ -26,6 +26,11 @@ public struct HackbanAPI: Sendable {
     public func connectedApps() async throws -> [ConnectedApp] { try await client.query("me.apps") }
     public func revokeApp(_ id: String) async throws { try await client.mutate("me.revokeApp", ["id": .string(id)]) }
 
+    /// The user's connected GitHub account. Connecting one happens in the browser (`/me`), since it's an OAuth
+    /// flow tied to the web session.
+    public func github() async throws -> GitHubStatus { try await client.query("me.github") }
+    public func disconnectGithub() async throws { try await client.mutate("me.disconnectGithub") }
+
     public func uploadAvatar(userId: String, data: Data, name: String, mimeType: String) async throws {
         _ = try await client.upload("api/users/\(userId)/avatar", files: [(name, mimeType, data)])
     }
@@ -373,4 +378,14 @@ public struct HackbanAPI: Sendable {
     public func uploadAttachments(card: String, files: [(name: String, mimeType: String, data: Data)]) async throws {
         _ = try await client.upload("api/cards/\(card)/attachments", files: files)
     }
+
+    // GitHub issues: the card is marked complete when every tracked issue is closed.
+    public func trackIssue(card: String, url: String) async throws {
+        try await client.mutate("card.trackIssue", ["id": .string(card), "url": .string(url)])
+    }
+
+    public func untrackIssue(_ issueId: String) async throws { try await client.mutate("card.untrackIssue", ["issueId": .string(issueId)]) }
+
+    /// Re-check an issue on GitHub now instead of waiting for the next poll.
+    public func refreshIssue(_ issueId: String) async throws { try await client.mutate("card.refreshIssue", ["issueId": .string(issueId)]) }
 }

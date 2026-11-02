@@ -223,8 +223,13 @@ final class CardModel {
         upload(files)
     }
 
+    /// A GitHub issue link is tracked rather than attached, on servers that track issues (the web does the same).
     func addLink(_ url: String, name: String?) {
-        perform(.addLink(id: TempID.make(), cardId: id, url: url, name: name?.isEmpty == false ? name : nil))
+        if let ref = GitHubIssueRef.parse(url), card?.tracksIssues == true {
+            trackIssue(ref)
+        } else {
+            perform(.addLink(id: TempID.make(), cardId: id, url: url, name: name?.isEmpty == false ? name : nil))
+        }
     }
 
     func renameAttachment(_ attachment: String, _ name: String) {
@@ -233,6 +238,24 @@ final class CardModel {
 
     func deleteAttachment(_ attachment: String) {
         perform(.deleteAttachment(id: attachment, cardId: id))
+    }
+
+    // MARK: GitHub issues
+
+    /// Track an issue: the card is marked complete when every tracked issue is closed. Works offline; the
+    /// server fetches the issue's title and state once it syncs.
+    func trackIssue(_ ref: GitHubIssueRef) {
+        perform(.trackIssue(id: TempID.make(), cardId: id, issue: ref))
+    }
+
+    func untrackIssue(_ issueId: String) {
+        perform(.untrackIssue(id: issueId, cardId: id))
+    }
+
+    /// Ask the server to re-check the issue on GitHub now.
+    func refreshIssue(_ issueId: String) {
+        guard !TempID.isTemp(issueId) else { app.flash("This issue hasn't synced yet. Try again in a moment."); return }
+        mutate { [api] in try await api.refreshIssue(issueId) }
     }
 
     /// Download an attachment to a temp file and open it (uploads need auth, links open in the browser).
