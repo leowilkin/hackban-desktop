@@ -26,6 +26,15 @@ jobs:
         with:
           name: Hackban
           path: build/Hackban.zip
+      # The updater only installs zips signed with the key whose public half is in the app's Info.plist. The
+      # secret only reaches this step, and the script fails if it's missing or doesn't match that public key.
+      - name: Sign release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          HACKBAN_UPDATE_KEY: ${{ secrets.HACKBAN_UPDATE_KEY }}
+        run: |
+          public_key="$(/usr/libexec/PlistBuddy -c 'Print :HackbanUpdatePublicKey' build/Hackban.app/Contents/Info.plist)"
+          ./Scripts/update-key.swift sign build/Hackban.zip "$public_key"
       # Artifacts need a signed-in download, so main's builds also go out as releases (build-<run number>).
       - name: Publish release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -35,7 +44,7 @@ jobs:
         run: |
           tag="build-$BUILD_NUMBER"
           if gh release view "$tag" >/dev/null 2>&1; then echo "$tag already released"; exit 0; fi
-          gh release create "$tag" build/Hackban.zip --target "$GITHUB_SHA" \
+          gh release create "$tag" build/Hackban.zip build/Hackban.zip.sig --target "$GITHUB_SHA" \
             --title "Build $BUILD_NUMBER" --notes "$(git log -1 --format=%s)"
 
   linux-kit:
