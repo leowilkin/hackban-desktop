@@ -25,6 +25,9 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin" "$app/Contents/MacOS/Hackban"
 cp Resources/Info.plist "$app/Contents/Info.plist"
+# The accent colour (Hack Club red) only takes from a compiled asset catalog that Info.plist names.
+xcrun actool Resources/Assets.xcassets --compile "$app/Contents/Resources" --platform macosx \
+  --minimum-deployment-target 14.0 --accent-color AccentColor --output-partial-info-plist "$(mktemp)" >/dev/null
 [[ -f Resources/AppIcon.icns ]] && cp Resources/AppIcon.icns "$app/Contents/Resources/" && \
   /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$app/Contents/Info.plist" >/dev/null
 

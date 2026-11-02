@@ -50,7 +50,7 @@ struct HackbanCommands: Commands {
         CommandGroup(after: .newItem) {
             Button("Quick Add Card…") { QuickAddController.shared.show() }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
-            Button("Go to Board…") { app.showPalette = true }
+            Button("Search…") { SearchController.shared.show() }
                 .keyboardShortcut("k", modifiers: .command)
             Button("Join Board from Link…") { JoinLinkPanel.present(app: app) }
             Divider()
@@ -61,7 +61,7 @@ struct HackbanCommands: Commands {
             Button("Home") { app.route = .home }.keyboardShortcut("1", modifiers: .command)
             Button("My Cards") { app.route = .myCards }.keyboardShortcut("2", modifiers: .command)
             Button("Notifications") { app.route = .notifications }.keyboardShortcut("3", modifiers: .command)
-            Button("Search") { app.route = .search }.keyboardShortcut("f", modifiers: [.command, .shift])
+            Button("Search") { SearchController.shared.show() }.keyboardShortcut("f", modifiers: [.command, .shift])
         }
     }
 }

@@ -9,7 +9,6 @@ enum Route: Hashable {
     case home
     case myCards
     case notifications
-    case search
     case board(account: String, id: String)
     case workspace(account: String, id: String)
     case profile(account: String)
@@ -33,8 +32,6 @@ final class AppModel {
     /// Card sheet over whatever's showing.
     var openCard: CardRef?
     var toast: String?
-    var searchText = ""
-    var showPalette = false
     var addingAccount = false
     var signInError: String?
 

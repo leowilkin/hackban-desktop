@@ -10,6 +10,8 @@ struct CardSheet: View {
     @State private var importing = false
     @State private var dropping = false
     @State private var confirm: ConfirmAction?
+    @State private var addingChecklist = false
+    @State private var attaching = false
 
     init(model: CardModel) { _model = State(initialValue: model) }
 
@@ -37,37 +39,46 @@ struct CardSheet: View {
     private var canEdit: Bool { model.boardModel?.board?.canEdit ?? true }
     private var board: Board? { model.boardModel?.board }
 
+    // Laid out like Linear's issue view: where the card lives along the top, the content down the left, and its
+    // properties down the right.
     private func content(_ card: Card) -> some View {
         VStack(spacing: 0) {
             CardCover(card: card, account: model.account)
-            HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    if canEdit {
-                        InlineEditor(value: card.title, font: .title2.bold(), axis: .vertical) { model.update(.init(title: $0)) }
-                    } else {
-                        Text(card.title).font(.title2.bold())
+            HStack(spacing: 12) {
+                HStack(spacing: 5) {
+                    if let b = card.list?.board?.name {
+                        Text(b)
+                        Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                     }
-                    HStack(spacing: 4) {
-                        Text("in list").foregroundStyle(.secondary)
-                        Text(card.list?.name ?? "").underline()
-                        if let b = card.list?.board?.name { Text("on \(b)").foregroundStyle(.secondary) }
-                        AccountTag(account: model.account)
-                        if card.closed { Text("Archived").font(.caption.bold()).padding(.horizontal, 5).background(Color.orange.opacity(0.3), in: Capsule()) }
-                    }
-                    .font(.callout)
+                    Text(card.list?.name ?? "")
                 }
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                AccountTag(account: model.account)
+                if card.closed { Text("Archived").font(.caption.bold()).padding(.horizontal, 5).background(Color.orange.opacity(0.3), in: Capsule()) }
                 Spacer()
-                Button { dismiss() } label: { Image(systemName: "xmark.circle.fill").font(.title2) }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                Button { model.toggleWatch() } label: { Image(systemName: card.watching == true ? "eye.fill" : "eye") }
+                    .help(card.watching == true ? "Stop watching" : "Watch: get notified of comments on this card")
+                CardActionsMenu(model: model, card: card, canEdit: canEdit, confirm: $confirm)
+                Button { dismiss() } label: { Image(systemName: "xmark") }
                     .keyboardShortcut(.cancelAction)
+                    .help("Close")
             }
-            .padding([.horizontal, .top], 20)
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            Divider()
 
-            HStack(alignment: .top, spacing: 20) {
+            HStack(alignment: .top, spacing: 0) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
-                        CardFacts(model: model, card: card, canEdit: canEdit)
+                        if canEdit {
+                            InlineEditor(value: card.title, font: .title2.weight(.semibold), axis: .vertical) { model.update(.init(title: $0)) }
+                        } else {
+                            Text(card.title).font(.title2.weight(.semibold))
+                        }
                         DescriptionSection(card: card, canEdit: canEdit) { model.update(.init(description: $0)) }
+                        if canEdit { addRow(card) }
                         ForEach(card.checklists ?? []) { cl in
                             ChecklistSection(model: model, checklist: cl, canEdit: canEdit)
                         }
@@ -76,16 +87,16 @@ struct CardSheet: View {
                         }
                         ActivitySection(model: model, card: card, canEdit: canEdit)
                     }
-                    .padding(.vertical, 16)
+                    .padding(24)
                 }
                 .frame(maxWidth: .infinity)
-                if canEdit {
-                    CardSidebar(model: model, card: card, importing: $importing, confirm: $confirm)
-                        .frame(width: 190)
-                        .padding(.top, 16)
+                Divider()
+                ScrollView {
+                    CardProperties(model: model, card: card, canEdit: canEdit)
+                        .padding(14)
                 }
+                .frame(width: 270)
             }
-            .padding(.horizontal, 20)
         }
         .overlay {
             if dropping {
@@ -109,6 +120,22 @@ struct CardSheet: View {
             if case .success(let urls) = result { model.upload(urls: urls) }
         }
         .onPasteCommand(of: [.fileURL, .png, .tiff, .jpeg]) { _ in pasteFiles() }
+    }
+
+    /// Add a checklist or attachment, under the description, like Linear's "Add sub-issues".
+    private func addRow(_ card: Card) -> some View {
+        HStack(spacing: 8) {
+            Button { addingChecklist = true } label: { Label("Checklist", systemImage: "plus") }
+                .popover(isPresented: $addingChecklist, arrowEdge: .bottom) {
+                    ChecklistAdder(model: model, card: card) { addingChecklist = false }.environment(app)
+                }
+            Button { attaching = true } label: { Label("Attachment", systemImage: "paperclip") }
+                .popover(isPresented: $attaching, arrowEdge: .bottom) {
+                    AttachmentAdder(model: model, importing: $importing) { attaching = false }.environment(app)
+                }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 
     /// ⌘V with files or an image on the clipboard attaches them.
@@ -139,85 +166,19 @@ struct CardCover: View {
     }
 }
 
-// MARK: facts row (members, labels, dates, watch)
+// MARK: due status
 
-struct CardFacts: View {
-    let model: CardModel
+/// Complete, overdue or due soon, as a small coloured pill; nothing otherwise.
+struct DueStatusPill: View {
     let card: Card
-    let canEdit: Bool
-    @State private var members = false
-    @State private var labels = false
-    @State private var dates = false
 
     var body: some View {
-        FlowLayout(spacing: 22) {
-            if let m = card.members, !m.isEmpty {
-                fact("Members") {
-                    HStack(spacing: 4) {
-                        ForEach(m, id: \.userId) { AvatarView(user: $0.user, account: model.account, size: 30) }
-                        if canEdit { addButton { members = true }.popover(isPresented: $members) { MemberPicker(model: model, card: card) } }
-                    }
-                }
-            }
-            if let l = card.labels, !l.isEmpty {
-                fact("Labels") {
-                    HStack(spacing: 4) {
-                        ForEach(l, id: \.labelId) { LabelChip(label: $0.label) }
-                        if canEdit { addButton { labels = true }.popover(isPresented: $labels) { LabelPicker(model: model, card: card) } }
-                    }
-                }
-            }
-            if card.start != nil || card.due != nil {
-                fact(card.due != nil ? "Due date" : "Start date") {
-                    HStack(spacing: 6) {
-                        if card.due != nil, canEdit {
-                            Toggle("", isOn: Binding(get: { card.dueComplete }, set: { model.update(.init(dueComplete: $0)) })).labelsHidden()
-                        }
-                        Button {
-                            dates = true
-                        } label: {
-                            HStack(spacing: 4) {
-                                if let s = card.start { Text(s.short) }
-                                if card.start != nil && card.due != nil { Text("–") }
-                                if let d = card.due { Text(d.shortWithTime) }
-                                if card.recurrence != nil { Image(systemName: "repeat") }
-                                statusPill
-                            }
-                        }
-                        .disabled(!canEdit)
-                        .popover(isPresented: $dates) { DatesEditor(model: model, card: card) }
-                    }
-                }
-            }
-            fact("Notifications") {
-                Button { model.toggleWatch() } label: {
-                    Label(card.watching == true ? "Watching" : "Watch", systemImage: card.watching == true ? "eye.fill" : "eye")
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var statusPill: some View {
         switch DueStatus.of(card) {
         case .complete?: Text("Complete").font(.caption.bold()).padding(.horizontal, 4).background(Color(hex: "#1f845a"), in: RoundedRectangle(cornerRadius: 3)).foregroundStyle(.white)
         case .overdue?: Text("Overdue").font(.caption.bold()).padding(.horizontal, 4).background(Color(hex: "#c9372c"), in: RoundedRectangle(cornerRadius: 3)).foregroundStyle(.white)
         case .soon?: Text("Due soon").font(.caption.bold()).padding(.horizontal, 4).background(Color(hex: "#f5cd47"), in: RoundedRectangle(cornerRadius: 3)).foregroundStyle(Color(hex: "#172b4d"))
         default: EmptyView()
         }
-    }
-
-    private func fact<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.caption.bold()).foregroundStyle(.secondary)
-            content()
-        }
-    }
-
-    private func addButton(_ action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: "plus").frame(width: 26, height: 26) }
-            .buttonStyle(.bordered)
-            .clipShape(Circle())
     }
 }
 

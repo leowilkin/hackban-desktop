@@ -2,94 +2,191 @@ import AppKit
 import HackbanKit
 import SwiftUI
 
-/// "Add to card" and "Actions" buttons beside the card.
-struct CardSidebar: View {
+/// The card's properties down the right of the card sheet, as in Linear's issue view: a grey name, then a value
+/// that opens its editor in a popover beside it.
+struct CardProperties: View {
     let model: CardModel
     let card: Card
-    @Binding var importing: Bool
-    @Binding var confirm: ConfirmAction?
+    let canEdit: Bool
     @Environment(AppModel.self) private var app
-    @Environment(\.dismiss) private var dismiss
-    @State private var open: Panel?
 
-    enum Panel: String, Identifiable {
-        case members, labels, checklist, dates, attachment, cover, dependencies, move, copy
-        var id: String { rawValue }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            PropertyRow("Status", enabled: canEdit, action: { model.update(.init(dueComplete: !card.dueComplete)) }) {
+                Label(card.dueComplete ? "Complete" : "Not complete", systemImage: card.dueComplete ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(card.dueComplete ? Color(hex: "#1f845a") : .primary)
+            }
+            PropertyRow("List", enabled: canEdit) {
+                Text(card.list?.name ?? "")
+            } editor: { close in
+                MoveCardPanel(model: model, card: card, copy: false, done: close).environment(app)
+            }
+            PropertyRow("Members", enabled: canEdit) {
+                if let m = card.members, !m.isEmpty {
+                    HStack(spacing: 6) {
+                        AvatarStack(users: m.map(\.user), account: model.account, size: 20, max: 5)
+                        if m.count == 1 { Text(m[0].user.displayName).lineLimit(1) }
+                    }
+                } else {
+                    placeholder("Add members")
+                }
+            } editor: { _ in
+                MemberPicker(model: model, card: card).environment(app)
+            }
+            PropertyRow("Labels", enabled: canEdit) {
+                if let l = card.labels, !l.isEmpty {
+                    FlowLayout(spacing: 4) { ForEach(l, id: \.labelId) { LabelChip(label: $0.label) } }
+                } else {
+                    placeholder("Add labels")
+                }
+            } editor: { _ in
+                LabelPicker(model: model, card: card).environment(app)
+            }
+            PropertyRow("Dates", enabled: canEdit) {
+                if card.start != nil || card.due != nil {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 4) {
+                            if let s = card.start { Text(s.short) }
+                            if card.start != nil && card.due != nil { Text("–") }
+                            if let d = card.due { Text(d.shortWithTime) }
+                            if card.recurrence != nil { Image(systemName: "repeat").foregroundStyle(.secondary) }
+                        }
+                        DueStatusPill(card: card)
+                    }
+                } else {
+                    placeholder("Add dates")
+                }
+            } editor: { _ in
+                DatesEditor(model: model, card: card).environment(app)
+            }
+            PropertyRow("Cover", enabled: canEdit) {
+                if card.coverAttachmentId != nil {
+                    Text("Image")
+                } else if let hex = Palette.mid(card.coverColor) {
+                    RoundedRectangle(cornerRadius: 3).fill(Color(hex: hex)).frame(width: 36, height: 14)
+                } else {
+                    placeholder("None")
+                }
+            } editor: { _ in
+                CoverPicker(model: model, card: card).environment(app)
+            }
+            PropertyRow("Depends on", enabled: canEdit) {
+                let blocked = card.blockedByTitles.count, blocking = card.blockingTitles.count
+                if blocked + blocking > 0 {
+                    VStack(alignment: .leading, spacing: 2) {
+                        if blocked > 0 { Text("Blocked by \(blocked)").foregroundStyle(Color(hex: "#c9372c")) }
+                        if blocking > 0 { Text("Blocking \(blocking)") }
+                    }
+                } else {
+                    placeholder("None")
+                }
+            } editor: { _ in
+                DependencyPicker(model: model, card: card).environment(app)
+            }
+        }
+    }
+
+    private func placeholder(_ text: String) -> some View {
+        Text(text).foregroundStyle(.tertiary)
+    }
+}
+
+/// One property: its name in grey, and its value as a quiet button that highlights on hover.
+private struct PropertyRow<Value: View, Editor: View>: View {
+    let title: String
+    let enabled: Bool
+    var action: (() -> Void)?
+    let value: Value
+    let editor: (_ close: @escaping () -> Void) -> Editor
+    @State private var open = false
+    @State private var hovering = false
+
+    init(_ title: String, enabled: Bool, @ViewBuilder value: () -> Value, @ViewBuilder editor: @escaping (_ close: @escaping () -> Void) -> Editor) {
+        self.title = title
+        self.enabled = enabled
+        self.value = value()
+        self.editor = editor
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Add to card").font(.caption.bold()).foregroundStyle(.secondary)
-            if let me = model.account.me, !card.memberIds.contains(me), let u = model.account.profile?.asUser {
-                button("Join", "person.badge.plus") { model.toggleMember(u) }
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(title).foregroundStyle(.secondary).frame(width: 84, alignment: .leading)
+            Button { if let action { action() } else { open = true } } label: {
+                value
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 5)
+                    .background(hovering && enabled ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 6))
+                    .contentShape(RoundedRectangle(cornerRadius: 6))
             }
-            button("Members", "person", .members)
-            button("Labels", "tag", .labels)
-            button("Checklist", "checklist", .checklist)
-            button("Dates", "clock", .dates)
-            button("Attachment", "paperclip", .attachment)
-            button("Cover", "photo", .cover)
-            button("Dependencies", "link", .dependencies)
-
-            Text("Actions").font(.caption.bold()).foregroundStyle(.secondary).padding(.top, 10)
-            button("Move", "arrow.right", .move)
-            button("Copy", "doc.on.doc", .copy)
-            button(card.watching == true ? "Watching" : "Watch", card.watching == true ? "eye.fill" : "eye") { model.toggleWatch() }
-            button("Copy link", "link.badge.plus") { copyToPasteboard(model.account.client.webURL("/c/\(card.id)").absoluteString); app.flash("Link copied") }
-            Divider()
-            if card.closed {
-                button("Send to board", "arrow.uturn.backward") { model.update(.init(closed: false)) }
-                button("Delete", "trash") {
-                    confirm = ConfirmAction(title: "Delete card?", message: "All actions will be removed from the activity feed and you won't be able to re-open the card. There is no undo.", button: "Delete") {
-                        let bm = model.boardModel
-                        Task {
-                            do {
-                                try await model.api.deleteCard(card.id)
-                                bm?.scheduleReload()
-                                dismiss()
-                            } catch { app.flash(error.localizedDescription) }
-                        }
-                    }
-                }
-            } else {
-                button("Archive", "archivebox") { model.update(.init(closed: true)) }
-            }
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.regular)
-        .popover(item: $open, arrowEdge: .leading) { panel in
-            Group {
-                switch panel {
-                case .members: MemberPicker(model: model, card: card)
-                case .labels: LabelPicker(model: model, card: card)
-                case .checklist: ChecklistAdder(model: model, card: card) { open = nil }
-                case .dates: DatesEditor(model: model, card: card)
-                case .attachment: AttachmentAdder(model: model, importing: $importing) { open = nil }
-                case .cover: CoverPicker(model: model, card: card)
-                case .dependencies: DependencyPicker(model: model, card: card)
-                case .move: MoveCardPanel(model: model, card: card, copy: false) { open = nil }
-                case .copy: MoveCardPanel(model: model, card: card, copy: true) { open = nil }
-                }
-            }
-            .environment(app)
-        }
-    }
-
-    private func button(_ title: String, _ icon: String, _ panel: Panel) -> some View {
-        button(title, icon) { open = panel }
-    }
-
-    private func button(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: icon).labelStyle(IconColumnLabelStyle()).frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.plain)
+            .disabled(!enabled)
+            .onHover { hovering = $0 }
+            .popover(isPresented: $open, arrowEdge: .leading) { editor { open = false } }
         }
     }
 }
 
-/// Puts the icon in a fixed-width column, so the titles line up down a stack of buttons whatever each symbol's width.
-private struct IconColumnLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 6) { configuration.icon.frame(width: 18); configuration.title }
+extension PropertyRow where Editor == EmptyView {
+    /// A property that acts when clicked instead of opening an editor.
+    init(_ title: String, enabled: Bool, action: @escaping () -> Void, @ViewBuilder value: () -> Value) {
+        self.init(title, enabled: enabled, value: value) { _ in EmptyView() }
+        self.action = action
+    }
+}
+
+/// The card's actions, behind the "…" in the card sheet's top bar.
+struct CardActionsMenu: View {
+    let model: CardModel
+    let card: Card
+    let canEdit: Bool
+    @Binding var confirm: ConfirmAction?
+    @Environment(AppModel.self) private var app
+    @Environment(\.dismiss) private var dismiss
+    @State private var panel: Panel?
+
+    enum Panel: String, Identifiable {
+        case move, copy
+        var id: String { rawValue }
+    }
+
+    var body: some View {
+        Menu {
+            if canEdit {
+                Button("Move…") { panel = .move }
+                Button("Copy…") { panel = .copy }
+            }
+            Button("Copy Link") { copyToPasteboard(model.account.client.webURL("/c/\(card.id)").absoluteString); app.flash("Link copied") }
+            if canEdit {
+                Divider()
+                if card.closed {
+                    Button("Send to Board") { model.update(.init(closed: false)) }
+                    Button("Delete…", role: .destructive) {
+                        confirm = ConfirmAction(title: "Delete card?", message: "All actions will be removed from the activity feed and you won't be able to re-open the card. There is no undo.", button: "Delete") {
+                            let bm = model.boardModel
+                            Task {
+                                do {
+                                    try await model.api.deleteCard(card.id)
+                                    bm?.scheduleReload()
+                                    dismiss()
+                                } catch { app.flash(error.localizedDescription) }
+                            }
+                        }
+                    }
+                } else {
+                    Button("Archive") { model.update(.init(closed: true)) }
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("More")
+        .popover(item: $panel, arrowEdge: .bottom) { p in
+            MoveCardPanel(model: model, card: card, copy: p == .copy) { panel = nil }.environment(app)
+        }
     }
 }
 

@@ -6,6 +6,8 @@ import SwiftUI
 struct MyCardsView: View {
     @Environment(AppModel.self) private var app
     @State private var loading = false
+    @State private var done = false
+    @State private var collapsed: Set<String> = []
 
     private struct Row: Identifiable {
         let account: Account
@@ -14,19 +16,45 @@ struct MyCardsView: View {
     }
 
     var body: some View {
-        let rows = app.visibleAccounts.flatMap { a in a.myCards.map { Row(account: a, card: $0) } }
+        let rows = app.visibleAccounts.flatMap { a in a.myCards.map { Row(account: a, card: $0) } }.filter { $0.card.dueComplete == done }
         let groups: [(String, [Row])] = group(rows)
-        List {
-            if rows.isEmpty && !loading {
-                Text("Nothing assigned to you. Join a card with Space while hovering it, or with @me in quick add.").foregroundStyle(.secondary)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                PageTitle(title: "My Cards", detail: "\(rows.count) \(rows.count == 1 ? "card" : "cards")").padding(.horizontal, 24)
+                FilterBar { PillTabs(selection: $done, options: [(false, "Open"), (true, "Done")]) }
+                ForEach(groups, id: \.0) { group in
+                    Section {
+                        if !collapsed.contains(group.0) {
+                            ForEach(group.1) { r in row(r) }
+                        }
+                    } header: {
+                        GroupHeader(title: group.0, count: group.1.count, collapsed: Binding(
+                            get: { collapsed.contains(group.0) },
+                            set: { if $0 { collapsed.insert(group.0) } else { collapsed.remove(group.0) } }
+                        ))
+                    }
+                }
             }
-            ForEach(groups, id: \.0) { group in
-                Section(group.0) {
-                    ForEach(group.1) { r in row(r) }
+            .frame(maxWidth: 860)
+            .frame(maxWidth: .infinity)
+        }
+        .overlay {
+            if rows.isEmpty && !loading {
+                if done {
+                    ContentUnavailableView("Nothing done yet", systemImage: "checkmark.circle", description: Text("Cards you complete show up here."))
+                } else {
+                    ContentUnavailableView {
+                        Label("Nothing assigned to you", systemImage: "person.crop.rectangle.stack")
+                    } description: {
+                        Text("Join a card with Space while hovering it, or with @me in quick add.")
+                    } actions: {
+                        Button("Quick Add a Card") { QuickAddController.shared.show() }.buttonStyle(.borderedProminent)
+                    }
                 }
             }
         }
         .navigationTitle("My Cards")
+        .hidingToolbarTitle()
         .toolbar {
             ToolbarItem { Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") } }
         }
@@ -63,38 +91,70 @@ struct MyCardsView: View {
         }
     }
 
+    /// A card as Todoist draws a task: a circle, the title (and the description's first line), then a line of
+    /// details with the board on the right, and a divider under it.
     private func row(_ r: Row) -> some View {
-        HStack(spacing: 10) {
-            Button {
-                var c = r.card
-                c.dueComplete.toggle()
-                if let i = r.account.myCards.firstIndex(where: { $0.id == c.id }) { r.account.myCards[i] = c }
-                app.run(r.account) {
-                    try await r.account.api.updateCard(c.id, .init(dueComplete: c.dueComplete))
-                    await r.account.refreshMyCards()
-                }
-            } label: {
-                Image(systemName: r.card.dueComplete ? "checkmark.circle.fill" : "circle").foregroundStyle(r.card.dueComplete ? Color.green : Color.secondary)
-            }
-            .buttonStyle(.plain)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(r.card.title).strikethrough(r.card.dueComplete)
-                HStack(spacing: 6) {
-                    AccountTag(account: r.account)
-                    if let b = r.card.list?.board {
-                        BoardBackground(background: b.background).frame(width: 12, height: 9).clipShape(RoundedRectangle(cornerRadius: 2))
-                        Text(b.name)
+        let (doneItems, totalItems) = r.card.checkCounts
+        let labels = (r.card.labels ?? []).map(\.label.name).filter { !$0.isEmpty }
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 10) {
+                Button {
+                    var c = r.card
+                    c.dueComplete.toggle()
+                    if let i = r.account.myCards.firstIndex(where: { $0.id == c.id }) { r.account.myCards[i] = c }
+                    app.run(r.account) {
+                        try await r.account.api.updateCard(c.id, .init(dueComplete: c.dueComplete))
+                        await r.account.refreshMyCards()
                     }
-                    if let l = r.card.list?.name { Text("· \(l)") }
-                    ForEach(r.card.labels ?? [], id: \.labelId) { LabelChip(label: $0.label, compact: true) }
+                } label: {
+                    Image(systemName: r.card.dueComplete ? "checkmark.circle.fill" : "circle")
+                        .font(.title3.weight(.light))
+                        .foregroundStyle(r.card.dueComplete ? Color(hex: "#1f845a") : Color.secondary)
                 }
-                .font(.caption).foregroundStyle(.secondary)
+                .buttonStyle(.plain)
+                .help(r.card.dueComplete ? "Mark incomplete" : "Mark complete")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(r.card.title).strikethrough(r.card.dueComplete).fixedSize(horizontal: false, vertical: true)
+                    if let line = r.card.description.split(separator: "\n").first {
+                        Text(line).font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    HStack(spacing: 12) {
+                        due(r.card)
+                        if !labels.isEmpty { Label(labels.joined(separator: ", "), systemImage: "tag").lineLimit(1) }
+                        if totalItems > 0 { Label("\(doneItems)/\(totalItems)", systemImage: "checklist") }
+                        Spacer(minLength: 12)
+                        AccountTag(account: r.account)
+                        if let b = r.card.list?.board {
+                            HStack(spacing: 5) {
+                                Text(b.name).lineLimit(1)
+                                BoardBackground(background: b.background).frame(width: 12, height: 9).clipShape(RoundedRectangle(cornerRadius: 2))
+                            }
+                            .help([b.name, r.card.list?.name].compactMap { $0 }.joined(separator: " · "))
+                        }
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
             }
-            Spacer()
-            DueBadge(card: r.card)
+            .padding(.vertical, 10)
+            Divider().padding(.leading, 30)
         }
-        .contentShape(Rectangle())
-        .onTapGesture { app.open(card: r.card.id, in: r.account, board: r.card.list?.board?.id) }
+        .modifier(ListRowStyle { app.open(card: r.card.id, in: r.account, board: r.card.list?.board?.id) })
+    }
+
+    /// The due date in Todoist's colours: red when overdue, green today, orange tomorrow.
+    @ViewBuilder
+    private func due(_ card: Card) -> some View {
+        if let d = card.due {
+            let cal = Calendar.current
+            let text = cal.isDateInToday(d) ? "Today" : cal.isDateInTomorrow(d) ? "Tomorrow" : d.formatted(.dateTime.day().month(.abbreviated))
+            let color: Color = card.dueComplete ? .secondary
+                : d < Date() ? Color(hex: "#d1453b")
+                : cal.isDateInToday(d) ? Color(hex: "#058527")
+                : cal.isDateInTomorrow(d) ? Color(hex: "#ad6200")
+                : .secondary
+            Label(text, systemImage: "calendar").foregroundStyle(color)
+        }
     }
 }
 
@@ -112,167 +172,53 @@ struct NotificationsView: View {
         let rows = app.visibleAccounts.flatMap { a in a.notifications.map { Row(account: a, n: $0) } }
             .filter { !unreadOnly || !$0.n.read }
             .sorted { $0.n.createdAt > $1.n.createdAt }
-        List {
-            if rows.isEmpty { Text(unreadOnly ? "No unread notifications." : "No notifications.").foregroundStyle(.secondary) }
-            ForEach(rows) { r in
-                HStack(alignment: .top, spacing: 10) {
-                    Circle().fill(r.n.read ? Color.clear : Color.accentColor).frame(width: 8, height: 8).padding(.top, 5)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(r.n.summary).bold(!r.n.read)
-                        if let t = r.n.data["text"], !t.isEmpty { Text(t).foregroundStyle(.secondary).lineLimit(3) }
-                        HStack { AccountTag(account: r.account); Text(r.n.createdAt.relative) }.font(.caption).foregroundStyle(.secondary)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                PageTitle(title: "Notifications", detail: "\(app.totalUnread) unread", icon: "tray").padding(.horizontal, 24)
+                FilterBar { PillTabs(selection: $unreadOnly, options: [(false, "All"), (true, "Unread")]) }
+                ForEach(rows) { r in
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(alignment: .top, spacing: 10) {
+                            Circle().fill(r.n.read ? Color.clear : Color.accentColor).frame(width: 7, height: 7).padding(.top, 5)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(r.n.summary).fontWeight(r.n.read ? .regular : .semibold).lineLimit(2)
+                                if let t = r.n.data["text"], !t.isEmpty { Text(t).foregroundStyle(.secondary).lineLimit(2) }
+                            }
+                            Spacer(minLength: 16)
+                            HStack(spacing: 8) {
+                                if !r.n.read { Button("Mark read") { app.markRead(r.n, in: r.account) }.buttonStyle(.link) }
+                                AccountTag(account: r.account)
+                                Text(r.n.createdAt.relative).foregroundStyle(.secondary).help(r.n.createdAt.formatted())
+                            }
+                            .font(.callout)
+                            .fixedSize()
+                        }
+                        .padding(.vertical, 10)
+                        Divider().padding(.leading, 17)
                     }
-                    Spacer()
-                    if !r.n.read { Button("Mark read") { app.markRead(r.n, in: r.account) }.buttonStyle(.link) }
+                    .modifier(ListRowStyle {
+                        app.markRead(r.n, in: r.account)
+                        if let c = r.n.cardId { app.open(card: c, in: r.account, board: r.n.boardId) }
+                    })
                 }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    app.markRead(r.n, in: r.account)
-                    if let c = r.n.cardId { app.open(card: c, in: r.account, board: r.n.boardId) }
-                }
+            }
+            .frame(maxWidth: 860)
+            .frame(maxWidth: .infinity)
+        }
+        .overlay {
+            if rows.isEmpty {
+                ContentUnavailableView(unreadOnly ? "You're all caught up" : "No notifications yet", systemImage: "tray",
+                                       description: Text("Comments on cards you watch, and being added to cards, show up here."))
             }
         }
         .navigationTitle("Notifications")
+        .hidingToolbarTitle()
         .toolbar {
-            ToolbarItemGroup {
-                Toggle("Unread only", isOn: $unreadOnly)
+            ToolbarItem {
                 Button("Mark all read") { app.markAllRead() }.disabled(app.totalUnread == 0)
             }
         }
         .task { await app.pollNotifications() }
-    }
-}
-
-/// Search boards and cards on every account at once.
-struct SearchView: View {
-    @Environment(AppModel.self) private var app
-    @State private var q = ""
-    @State private var results: [(Account, SearchResults)] = []
-    @State private var searching = false
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            TextField("Search boards and cards on every server", text: $q)
-                .textFieldStyle(.roundedBorder)
-                .controlSize(.large)
-                .focused($focused)
-                .padding()
-            List {
-                if searching { ProgressView() }
-                ForEach(results, id: \.0.id) { pair in
-                    let a = pair.0, r = pair.1
-                    if !r.boards.isEmpty {
-                        Section("Boards" + (app.accounts.count > 1 ? " · \(a.config.label)" : "")) {
-                            ForEach(r.boards) { b in
-                                HStack {
-                                    BoardBackground(background: b.background).frame(width: 30, height: 22).clipShape(RoundedRectangle(cornerRadius: 3))
-                                    Text(b.name)
-                                }
-                                .contentShape(Rectangle())
-                                .onTapGesture { app.open(board: b.id, in: a) }
-                            }
-                        }
-                    }
-                    if !r.cards.isEmpty {
-                        Section("Cards" + (app.accounts.count > 1 ? " · \(a.config.label)" : "")) {
-                            ForEach(r.cards) { c in
-                                VStack(alignment: .leading) {
-                                    Text(c.title)
-                                    Text("\(c.list?.board?.name ?? "") · \(c.list?.name ?? "")").font(.caption).foregroundStyle(.secondary)
-                                }
-                                .contentShape(Rectangle())
-                                .onTapGesture { app.open(card: c.id, in: a, board: c.list?.board?.id) }
-                            }
-                        }
-                    }
-                }
-                if !searching && q.count >= 2 && results.allSatisfy({ $0.1.boards.isEmpty && $0.1.cards.isEmpty }) {
-                    Text("Nothing found for \"\(q)\".").foregroundStyle(.secondary)
-                }
-            }
-        }
-        .navigationTitle("Search")
-        .onAppear { focused = true }
-        .task(id: q) {
-            let query = q.trimmingCharacters(in: .whitespaces)
-            guard query.count >= 2 else { results = []; return }
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else { return }
-            searching = true
-            var out: [(Account, SearchResults)] = []
-            for a in app.visibleAccounts where !a.signedOut {
-                if let r = try? await a.api.search(query) { out.append((a, r)) }
-            }
-            if !Task.isCancelled { results = out }
-            searching = false
-        }
-    }
-}
-
-/// ⌘K: jump to any board on any account.
-struct BoardPalette: View {
-    @Environment(AppModel.self) private var app
-    @Environment(\.dismiss) private var dismiss
-    @State private var q = ""
-    @State private var selected = 0
-
-    private struct Item: Identifiable {
-        let account: Account
-        let workspace: String
-        let board: BoardSummary
-        var id: String { "\(account.id)|\(board.id)" }
-    }
-
-    var body: some View {
-        let items = matches
-        VStack(spacing: 0) {
-            TextField("Go to board…", text: $q)
-                .textFieldStyle(.plain)
-                .font(.title3)
-                .padding(14)
-                .onSubmit { if items.indices.contains(selected) { go(items[selected]) } }
-                .onKeyPress(.downArrow) { selected = min(selected + 1, max(items.count - 1, 0)); return .handled }
-                .onKeyPress(.upArrow) { selected = max(selected - 1, 0); return .handled }
-            Divider()
-            ScrollViewReader { proxy in
-                List(Array(items.enumerated()), id: \.element.id) { pair in
-                    let i = pair.offset, item = pair.element
-                    HStack {
-                        BoardBackground(background: item.board.background).frame(width: 26, height: 18).clipShape(RoundedRectangle(cornerRadius: 3))
-                        Text(item.board.name)
-                        Text(item.workspace).foregroundStyle(.secondary)
-                        Spacer()
-                        AccountTag(account: item.account)
-                    }
-                    .padding(.vertical, 2)
-                    .listRowBackground(i == selected ? Color.accentColor.opacity(0.2) : Color.clear)
-                    .contentShape(Rectangle())
-                    .onTapGesture { go(item) }
-                    .id(i)
-                }
-                .onChange(of: selected) { _, s in proxy.scrollTo(s) }
-            }
-        }
-        .frame(width: 520, height: 420)
-        .onChange(of: q) { _, _ in selected = 0 }
-        .onExitCommand { dismiss() }
-    }
-
-    private var matches: [Item] {
-        let all = app.visibleAccounts.flatMap { a in a.allBoards.map { Item(account: a, workspace: $0.workspace, board: $0.board) } }
-        guard !q.isEmpty else {
-            let recent = app.visibleAccounts.flatMap { a in a.recent.map { Item(account: a, workspace: "Recent", board: $0) } }
-            return recent + all.filter { i in !recent.contains { $0.id == i.id } }
-        }
-        let n = q.lowercased()
-        return all.filter { $0.board.name.lowercased().contains(n) || $0.workspace.lowercased().contains(n) }
-            .sorted { ($0.board.name.lowercased().hasPrefix(n) ? 0 : 1) < ($1.board.name.lowercased().hasPrefix(n) ? 0 : 1) }
-    }
-
-    private func go(_ item: Item) {
-        app.open(board: item.board.id, in: item.account)
-        dismiss()
     }
 }
 

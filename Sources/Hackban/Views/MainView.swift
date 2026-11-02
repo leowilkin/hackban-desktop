@@ -25,7 +25,6 @@ struct MainView: View {
                     .environment(app)
             }
         }
-        .sheet(isPresented: $app.showPalette) { BoardPalette().environment(app) }
         .sheet(isPresented: $app.addingAccount) { AddAccountView().environment(app) }
     }
 }
@@ -39,7 +38,6 @@ struct DetailView: View {
         case .home: HomeView()
         case .myCards: MyCardsView()
         case .notifications: NotificationsView()
-        case .search: SearchView()
         case .board(let acc, let id):
             if let a = app.account(acc) { BoardScreen(model: app.boardModel(account: a, boardId: id)).id("\(acc)|\(id)") } else { missing }
         case .workspace(let acc, let id):
@@ -61,7 +59,7 @@ struct WelcomeView: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            Image(systemName: "rectangle.split.3x1.fill").font(.system(size: 56)).foregroundStyle(Color.hackClubRed)
+            HackbanMark(size: 64)
             Text("Hackban").font(.largeTitle.bold())
             Text("Sign in to a Hackban server to get started. You can add more later, like a work server and a personal one, and see all of them at once.")
                 .multilineTextAlignment(.center)

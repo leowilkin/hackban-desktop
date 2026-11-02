@@ -20,12 +20,16 @@ struct SidebarView: View {
         @Bindable var app = app
         List(selection: $app.route) {
             Section {
-                Label("Home", systemImage: "house").tag(Route.home)
-                Label("My Cards", systemImage: "person.crop.rectangle.stack").tag(Route.myCards)
-                Label("Notifications", systemImage: "bell")
+                Button { SearchController.shared.show() } label: { navRow("Search", "magnifyingglass") }
+                    .buttonStyle(.plain)
+                    .help("Search boards and cards (⌘K)")
+                navRow("Home", "house").tag(Route.home)
+                navRow("My Cards", "person.crop.rectangle.stack")
+                    .badge(app.visibleAccounts.reduce(0) { n, a in n + a.myCards.filter { !$0.dueComplete }.count })
+                    .tag(Route.myCards)
+                navRow("Notifications", "tray")
                     .badge(app.totalUnread)
                     .tag(Route.notifications)
-                Label("Search", systemImage: "magnifyingglass").tag(Route.search)
             }
 
             if app.visibleAccounts.contains(where: { !$0.starredBoards.isEmpty }) {
@@ -46,19 +50,53 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom) {
-            HStack {
-                Button { app.addingAccount = true } label: { Label("Add Server", systemImage: "plus") }
-                    .buttonStyle(.borderless)
-                Spacer()
-                Button { QuickAddController.shared.show() } label: { Image(systemName: "plus.rectangle.on.rectangle") }
-                    .buttonStyle(.borderless)
-                    .help("Quick add a card (\(HotKeyCenter.shared.shortcut?.display ?? "⌃⌥Space"))")
-            }
-            .padding(10)
-        }
+        .safeAreaInset(edge: .top, spacing: 0) { header }
         .sheet(item: $creatingBoard) { n in CreateBoardView(account: n.account, workspaceId: n.workspaceId).environment(app) }
         .sheet(item: $creatingWorkspace) { a in CreateWorkspaceView(account: a).environment(app) }
+    }
+
+    /// The top of the sidebar, after Todoist's: the app's switcher menu, then a red Add card.
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Menu {
+                Button("Add Server…") { app.addingAccount = true }
+                Button("Join Board from Link…") { JoinLinkPanel.present(app: app) }
+                Divider()
+                SettingsLink { Text("Settings…") }
+            } label: {
+                HStack(spacing: 7) {
+                    HackbanMark(size: 20)
+                    Text("Hackban").fontWeight(.semibold)
+                    Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            Button { QuickAddController.shared.show() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title2)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, Color.hackClubRed)
+                    Text("Add card").fontWeight(.semibold).foregroundStyle(Color.hackClubRed)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Quick add a card (\(HotKeyCenter.shared.shortcut?.display ?? "⌃⌥Space"))")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
+    }
+
+    /// Grey icons, as in Linear's sidebar, rather than accent-coloured ones.
+    private func navRow(_ title: String, _ icon: String) -> some View {
+        Label { Text(title) } icon: { Image(systemName: icon).foregroundStyle(.secondary) }
     }
 }
 
