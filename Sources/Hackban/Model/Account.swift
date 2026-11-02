@@ -132,25 +132,34 @@ final class Account: Identifiable {
         guard !signedOut, !sync.isOffline else { return }
         // Fetched under these tokens; if they change meanwhile, nothing that comes back is used.
         let generation = sync.identity.generation
-        do {
-            async let p = api.profile()
-            async let w = api.workspaces()
-            async let g = api.guestBoards()
-            async let r = api.recentBoards()
-            async let n = api.notifications()
-            let me = try await p
-            guard confirmIdentity(me.id, generation: generation) else { return }
-            profile = me
-            workspaces = try await w
-            guestBoards = try await g
-            recent = try await r
-            notifications = try await n
-            lastError = nil
-            loaded = true
-            saveSnapshot()
-        } catch {
+        async let p = api.profile()
+        async let w = api.workspaces()
+        async let g = api.guestBoards()
+        async let r = api.recentBoards()
+        async let n = api.notifications()
+        let me: Profile
+        do { me = try await p } catch {
             handle(error)
+            return
         }
+        // Everything comes back before anything is used: from the identity check on, nothing waits, so a
+        // sign-in can't start between the check and what's shown.
+        var lists: (workspaces: [Workspace], guest: [BoardSummary], recent: [BoardSummary], notifications: [HackbanNotification])?
+        var failure: Error?
+        do { lists = (try await w, try await g, try await r, try await n) } catch { failure = error }
+        guard !signedOut, confirmIdentity(me.id, generation: generation) else { return }
+        profile = me
+        guard let lists else {
+            if let failure { handle(failure) }
+            return
+        }
+        workspaces = lists.workspaces
+        guestBoards = lists.guest
+        recent = lists.recent
+        notifications = lists.notifications
+        lastError = nil
+        loaded = true
+        saveSnapshot()
     }
 
     func refreshNotifications() async {
