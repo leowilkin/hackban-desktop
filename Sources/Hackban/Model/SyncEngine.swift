@@ -446,11 +446,13 @@ final class SyncEngine {
 
     /// Signing out of the account for good: forget everything on disk.
     func wipe() {
-        probeTask?.cancel()
         store.removeAll()
         queue = OfflineQueue()
+        queueSetAside = nil
         boardSnapshots = [:]
         cardSnapshots = [:]
+        boardFetchedAt = [:]
+        recent = []
         recompute()
     }
 }

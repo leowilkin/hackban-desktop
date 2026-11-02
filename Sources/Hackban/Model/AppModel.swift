@@ -65,9 +65,11 @@ final class AppModel {
             let creds = try await SignIn().run(server: server, http: URLSessionHTTP())
             // Signing in to a server we already have replaces that account's tokens.
             if let existing = accounts.first(where: { $0.config.server == server }) {
+                let previous = existing.me
                 await existing.tokens.set(creds)
                 existing.signedOut = false
                 await existing.refresh()
+                await forgetIfSomeoneElse(existing, was: previous)
                 existing.sync.resume()
             } else {
                 let config = AccountConfig(id: UUID().uuidString, server: server, label: label.isEmpty ? (server.host ?? "Hackban") : label, colorIndex: accounts.count)
@@ -87,10 +89,12 @@ final class AppModel {
     func reauthenticate(_ a: Account) async {
         do {
             let creds = try await SignIn().run(server: a.config.server, http: URLSessionHTTP())
+            let previous = a.me
             await a.tokens.set(creds)
             a.signedOut = false
             a.lastError = nil
             await a.refresh()
+            await forgetIfSomeoneElse(a, was: previous)
             a.sync.resume()
         } catch {
             if (error as? HackbanError) != .cancelled { flash(error.localizedDescription) }
@@ -103,6 +107,17 @@ final class AppModel {
         a.workspaces = []
         a.notifications = []
         a.myCards = []
+        // Signing out on purpose takes this server's boards and cards off the Mac too.
+        a.sync.wipe()
+    }
+
+    /// Signed back in to a server as someone else: what this Mac kept for it was the other person's.
+    private func forgetIfSomeoneElse(_ a: Account, was previous: String?) async {
+        guard let previous, let now = a.me, now != previous else { return }
+        a.sync.wipe()
+        boardModels = boardModels.filter { $0.value.account.id != a.id }
+        if case .board(let acc, _)? = route, acc == a.id { route = .home }
+        await a.refresh()
     }
 
     func remove(_ a: Account) async {
