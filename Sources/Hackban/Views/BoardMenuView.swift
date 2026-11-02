@@ -3,30 +3,52 @@ import HackbanKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The web's board menu: about, background, labels, archived items, activity, copy/move, export, close, delete.
-struct BoardMenuView: View {
+/// The web's board menu as an inspector beside the board: about, background, labels, archived items, activity,
+/// copy/move, export, close, delete. Icon tabs along the top, like Xcode's inspector.
+struct BoardInspector: View {
     @Bindable var model: BoardModel
-    @Environment(AppModel.self) private var app
-    @Environment(\.dismiss) private var dismiss
+    let close: () -> Void
     @State private var tab: Tab = .about
 
     enum Tab: String, CaseIterable, Identifiable {
         case about = "About", background = "Background", labels = "Labels", archived = "Archived", activity = "Activity", more = "More"
         var id: String { rawValue }
+
+        var icon: String {
+            switch self {
+            case .about: return "info.circle"
+            case .background: return "photo"
+            case .labels: return "tag"
+            case .archived: return "archivebox"
+            case .activity: return "clock.arrow.circlepath"
+            case .more: return "ellipsis.circle"
+            }
+        }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Picker("", selection: $tab) {
-                    ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+            HStack(spacing: 0) {
+                ForEach(Tab.allCases) { t in
+                    Button { tab = t } label: {
+                        Image(systemName: t.icon)
+                            .symbolVariant(tab == t ? .fill : .none)
+                            .foregroundStyle(tab == t ? Color.accentColor : Color.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(t.rawValue)
+                    .accessibilityLabel(t.rawValue)
+                    .accessibilityAddTraits(tab == t ? .isSelected : [])
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
-            .padding()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
             Divider()
+            Text(tab.rawValue).font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding([.horizontal, .top])
             Group {
                 switch tab {
                 case .about: AboutBoard(model: model)
@@ -34,12 +56,12 @@ struct BoardMenuView: View {
                 case .labels: LabelsTab(model: model)
                 case .archived: ArchivedTab(model: model)
                 case .activity: ActivityTab(model: model)
-                case .more: MoreTab(model: model) { dismiss() }
+                case .more: MoreTab(model: model, close: close)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(width: 620, height: 600)
+        .inspectorColumnWidth(min: 280, ideal: 320, max: 440)
     }
 }
 
@@ -91,8 +113,9 @@ private struct BackgroundTab: View {
                 BackgroundPicker(selection: Binding(get: { b.background }, set: { model.updateBoard(.init(background: $0)) }))
                     .disabled(!b.canEdit)
                 Text("Image").font(.headline)
+                TextField("https://…", text: $imageURL).textFieldStyle(.roundedBorder)
+                    .disabled(!b.canEdit)
                 HStack {
-                    TextField("https://…", text: $imageURL).textFieldStyle(.roundedBorder)
                     Button("Set image") {
                         let u = imageURL.trimmingCharacters(in: .whitespaces)
                         guard u.hasPrefix("https://") else { model.app.flash("Images must be an https URL."); return }
@@ -146,10 +169,8 @@ private struct ArchivedTab: View {
 
     var body: some View {
         VStack(alignment: .leading) {
-            HStack {
-                TextField("Search archive…", text: $q).textFieldStyle(.roundedBorder)
-                Picker("", selection: $showLists) { Text("Cards").tag(false); Text("Lists").tag(true) }.pickerStyle(.segmented).fixedSize()
-            }
+            Picker("", selection: $showLists) { Text("Cards").tag(false); Text("Lists").tag(true) }.pickerStyle(.segmented).labelsHidden()
+            TextField("Search archive…", text: $q).textFieldStyle(.roundedBorder)
             if let items {
                 List {
                     if showLists {
@@ -157,8 +178,8 @@ private struct ArchivedTab: View {
                             HStack {
                                 Text(l.name)
                                 Spacer()
-                                Button("Restore") { act { try await model.api.updateList(l.id, closed: false) } }
-                                Button("Delete") {
+                                restoreButton { act { try await model.api.updateList(l.id, closed: false) } }
+                                deleteButton {
                                     confirm = ConfirmAction(title: "Delete \(l.name)?", message: "The list and its cards are deleted for good.", button: "Delete") {
                                         act { try await model.api.deleteList(l.id) }
                                     }
@@ -174,14 +195,20 @@ private struct ArchivedTab: View {
                                 }
                                 .onTapGesture { app.open(card: c.id, in: model.account) }
                                 Spacer()
-                                Button("Restore") { act { try await model.api.updateCard(c.id, .init(closed: false)) } }
-                                Button("Delete") {
+                                restoreButton { act { try await model.api.updateCard(c.id, .init(closed: false)) } }
+                                deleteButton {
                                     confirm = ConfirmAction(title: "Delete card?", message: "\(c.title) is deleted for good. There is no undo.", button: "Delete") {
                                         act { try await model.api.deleteCard(c.id) }
                                     }
                                 }
                             }
                         }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .overlay {
+                    if showLists ? items.lists.isEmpty : items.cards.isEmpty {
+                        ContentUnavailableView(showLists ? "No archived lists" : "No archived cards", systemImage: "archivebox")
                     }
                 }
             } else {
@@ -195,6 +222,15 @@ private struct ArchivedTab: View {
 
     private func reload() async {
         items = try? await model.api.archived(model.boardId)
+    }
+
+    // Icons rather than "Restore" and "Delete" in words, which left no room for titles in the inspector.
+    private func restoreButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: "arrow.uturn.backward") }.buttonStyle(.borderless).help("Send back to the board")
+    }
+
+    private func deleteButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: "trash") }.buttonStyle(.borderless).help("Delete")
     }
 
     private func act(_ op: @escaping () async throws -> Void) {
@@ -220,6 +256,8 @@ struct ActivityTab: View {
                 Button("Load more") { Task { await load(more: true) } }.disabled(loading)
             }
         }
+        // Rows on the inspector's glass, not on a slab of the list's own background.
+        .scrollContentBackground(.hidden)
         .task { await load(more: false) }
     }
 
@@ -329,6 +367,7 @@ private struct MoreTab: View {
                 }
             }
             .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
             .confirm($confirm)
             .onAppear {
                 copyName = "\(b.name) (copy)"

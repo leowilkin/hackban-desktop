@@ -175,6 +175,34 @@ struct AccountTag: View {
     }
 }
 
+extension NSImage {
+    /// Hackban's logo (hackclub/hackban src/app/icon.svg) as a menu bar template: the rounded square with its two
+    /// columns cut out, and a dot bitten out of the corner when something's unread.
+    static func hackbanMenuBarIcon(unread: Bool) -> NSImage {
+        let image = NSImage(size: NSSize(width: 16, height: 16), flipped: true) { rect in
+            let s = rect.width / 32  // the SVG's 32pt grid
+            func box(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ r: CGFloat) -> NSBezierPath {
+                NSBezierPath(roundedRect: NSRect(x: x * s, y: y * s, width: w * s, height: h * s), xRadius: r * s, yRadius: r * s)
+            }
+            let logo = box(0, 0, 32, 32, 7.2)
+            logo.append(box(6, 6, 8.5, 18, 2))
+            logo.append(box(17.5, 6, 8.5, 11, 2))
+            logo.windingRule = .evenOdd
+            NSColor.black.setFill()
+            logo.fill()
+            if unread {
+                NSGraphicsContext.current?.compositingOperation = .clear
+                NSBezierPath(ovalIn: NSRect(x: 19 * s, y: -3 * s, width: 16 * s, height: 16 * s)).fill()
+                NSGraphicsContext.current?.compositingOperation = .sourceOver
+                NSBezierPath(ovalIn: NSRect(x: 22 * s, y: 0, width: 10 * s, height: 10 * s)).fill()
+            }
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
+}
+
 // MARK: text
 
 /// Markdown rendered with AttributedString (links clickable), keeping line breaks.
@@ -315,4 +343,39 @@ extension View {
 func copyToPasteboard(_ s: String) {
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(s, forType: .string)
+}
+
+/// Closes a sheet when you click the window behind it, like the web's modals. macOS sheets don't do that on their own.
+/// Clicks in that window's titlebar and toolbar still go through, and nothing happens while the sheet has its own
+/// alert or file picker up.
+struct DismissOnOutsideClick: NSViewRepresentable {
+    let dismiss: () -> Void
+
+    func makeNSView(context: Context) -> Watcher { Watcher(dismiss: dismiss) }
+    func updateNSView(_ view: Watcher, context: Context) { view.dismiss = dismiss }
+
+    final class Watcher: NSView {
+        var dismiss: () -> Void
+        private var monitor: Any?
+
+        init(dismiss: @escaping () -> Void) {
+            self.dismiss = dismiss
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                guard let self, let sheet = self.window, sheet.attachedSheet == nil, let parent = sheet.sheetParent,
+                      event.window === parent, parent.contentLayoutRect.contains(event.locationInWindow) else { return event }
+                self.dismiss()
+                return nil
+            }
+        }
+    }
 }

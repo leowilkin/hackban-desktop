@@ -67,14 +67,16 @@ struct BoardScreen: View {
         .focused($focused)
         .onAppear { focused = true }
         .onKeyPress(phases: .down) { press in handleKey(press, board) }
-        .sheet(isPresented: $showMenu) { BoardMenuView(model: model).environment(app) }
+        .inspector(isPresented: $showMenu) { BoardInspector(model: model) { showMenu = false } }
         .sheet(isPresented: $showShare) { ShareBoardView(model: model).environment(app) }
     }
 
     @ToolbarContentBuilder
     private func toolbar(_ board: Board) -> some ToolbarContent {
         ToolbarItemGroup {
+            // Inset, like the avatars below, so the chip clears the rounded end of its glass group.
             AccountTag(account: model.account)
+                .padding(.horizontal, 4)
             Button { model.toggleStar() } label: {
                 Image(systemName: board.starred ? "star.fill" : "star").foregroundStyle(board.starred ? Color.yellow : Color.secondary)
             }
@@ -86,13 +88,15 @@ struct BoardScreen: View {
             }
             .help("Visibility")
             .disabled(!board.isAdmin)
+            // Inset so the first avatar clears the rounded end of the toolbar's glass group.
             AvatarStack(users: board.members.map(\.user), account: model.account, size: 22, max: 6)
+                .padding(.horizontal, 4)
             Button { showShare = true } label: { Label("Share", systemImage: "person.badge.plus") }
             Button { showFilters.toggle() } label: {
                 Label("Filter", systemImage: model.filters.isActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
             }
             .popover(isPresented: $showFilters) { FilterPopover(model: model) }
-            Button { showMenu = true } label: { Label("Menu", systemImage: "ellipsis") }.help("Board menu (w)")
+            Button { showMenu.toggle() } label: { Label("Inspector", systemImage: "sidebar.trailing") }.help("Board inspector (w)")
         }
     }
 
@@ -148,7 +152,7 @@ struct BoardScreen: View {
     /// The web app's hover shortcuts.
     private func handleKey(_ press: KeyPress, _ board: Board) -> KeyPress.Result {
         let key = press.characters
-        if key == "w" { showMenu = true; return .handled }
+        if key == "w" { showMenu.toggle(); return .handled }
         if key == "q" {
             if let me = model.account.me { model.filters.members = model.filters.members == [me] ? [] : [me] }
             return .handled

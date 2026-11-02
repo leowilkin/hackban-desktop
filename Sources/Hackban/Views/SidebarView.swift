@@ -2,9 +2,18 @@ import AppKit
 import HackbanKit
 import SwiftUI
 
+/// Sheet request for a new board, optionally in a given workspace.
+struct NewBoard: Identifiable {
+    let account: Account
+    var workspaceId: String?
+    var id: String { "\(account.id)|\(workspaceId ?? "")" }
+}
+
+// Each workspace is its own collapsible section rather than an expandable row: once any row in a sidebar can
+// expand, macOS reserves a chevron gutter down every row, which pushed everything in.
 struct SidebarView: View {
     @Environment(AppModel.self) private var app
-    @State private var creatingBoard: Account?
+    @State private var creatingBoard: NewBoard?
     @State private var creatingWorkspace: Account?
 
     var body: some View {
@@ -19,8 +28,21 @@ struct SidebarView: View {
                 Label("Search", systemImage: "magnifyingglass").tag(Route.search)
             }
 
+            if app.visibleAccounts.contains(where: { !$0.starredBoards.isEmpty }) {
+                SavedSection("starred") {
+                    ForEach(app.visibleAccounts) { a in
+                        ForEach(a.starredBoards) { b in
+                            BoardRow(board: b, account: a, showAccount: app.accounts.count > 1)
+                                .tag(Route.board(account: a.id, id: b.id))
+                        }
+                    }
+                } header: {
+                    Text("Starred")
+                }
+            }
+
             ForEach(app.visibleAccounts) { account in
-                AccountSection(account: account, creatingBoard: $creatingBoard, creatingWorkspace: $creatingWorkspace)
+                AccountSections(account: account, creatingBoard: $creatingBoard, creatingWorkspace: $creatingWorkspace)
             }
         }
         .listStyle(.sidebar)
@@ -35,106 +57,138 @@ struct SidebarView: View {
             }
             .padding(10)
         }
-        .sheet(item: $creatingBoard) { a in CreateBoardView(account: a).environment(app) }
+        .sheet(item: $creatingBoard) { n in CreateBoardView(account: n.account, workspaceId: n.workspaceId).environment(app) }
         .sheet(item: $creatingWorkspace) { a in CreateWorkspaceView(account: a).environment(app) }
     }
 }
 
-private struct AccountSection: View {
-    let account: Account
-    @Binding var creatingBoard: Account?
-    @Binding var creatingWorkspace: Account?
-    @Environment(AppModel.self) private var app
+/// A sidebar section that remembers whether it's collapsed.
+private struct SavedSection<Content: View, Header: View>: View {
     @AppStorage private var expanded: Bool
+    private let content: Content
+    private let header: Header
 
-    init(account: Account, creatingBoard: Binding<Account?>, creatingWorkspace: Binding<Account?>) {
-        self.account = account
-        _creatingBoard = creatingBoard
-        _creatingWorkspace = creatingWorkspace
-        _expanded = AppStorage(wrappedValue: true, "hackban:sidebar-expanded:\(account.id)")
+    init(_ key: String, @ViewBuilder content: () -> Content, @ViewBuilder header: () -> Header) {
+        _expanded = AppStorage(wrappedValue: true, "hackban:sidebar-expanded:\(key)")
+        self.content = content()
+        self.header = header()
     }
 
     var body: some View {
-        Section(isExpanded: $expanded) {
-            if account.signedOut {
-                Button { Task { await app.reauthenticate(account) } } label: {
-                    Label("Signed out. Sign in again…", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
-                }
-                .buttonStyle(.plain)
-            } else if !account.loaded {
-                ProgressView().controlSize(.small)
-            }
-            let starred = account.starredBoards
-            if !starred.isEmpty {
-                ForEach(starred) { b in boardRow(b, star: true) }
-            }
-            ForEach(account.workspaces) { w in
-                DisclosureGroup {
-                    ForEach(w.boards) { b in boardRow(b) }
-                } label: {
-                    HStack(spacing: 6) {
-                        WorkspaceLogo(name: w.name, logo: w.logo, account: account, size: 16)
-                        Text(w.name)
+        Section(isExpanded: $expanded) { content } header: { header }
+    }
+}
+
+/// An account's workspaces, a section each, then its guest boards. The account's own status (signed out, loading)
+/// gets a section of its own when there's something to say or no workspace to hang its menu on.
+private struct AccountSections: View {
+    let account: Account
+    @Binding var creatingBoard: NewBoard?
+    @Binding var creatingWorkspace: Account?
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        if account.signedOut || !account.loaded || account.workspaces.isEmpty {
+            Section {
+                if account.signedOut {
+                    Button { Task { await app.reauthenticate(account) } } label: {
+                        Label("Signed out. Sign in again…", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
                     }
-                    .tag(Route.workspace(account: account.id, id: w.id))
-                    .contextMenu {
-                        Button("Open Workspace") { app.route = .workspace(account: account.id, id: w.id) }
-                        Button("New Board…") { creatingBoard = account }
-                    }
+                    .buttonStyle(.plain)
+                } else if !account.loaded {
+                    ProgressView().controlSize(.small)
                 }
+            } header: {
+                header(account.config.label) { accountMenu }
             }
-            if !account.guestBoards.isEmpty {
-                DisclosureGroup("Guest boards") {
-                    ForEach(account.guestBoards) { b in boardRow(b) }
+        }
+        ForEach(account.workspaces) { w in
+            SavedSection("\(account.id):\(w.id)") {
+                ForEach(w.boards) { b in
+                    BoardRow(board: b, account: account).tag(Route.board(account: account.id, id: b.id))
                 }
-            }
-        } header: {
-            HStack(spacing: 6) {
-                Circle().fill(account.color).frame(width: 8, height: 8)
-                Text(account.config.label)
-                if account.unread > 0 { Text("\(account.unread)").font(.caption2.bold()).foregroundStyle(.secondary) }
-                Spacer()
-                Menu {
-                    Button("New Board…") { creatingBoard = account }
-                    Button("New Workspace…") { creatingWorkspace = account }
+            } header: {
+                header(w.name) {
+                    Button("Open Workspace") { app.route = .workspace(account: account.id, id: w.id) }
+                    Button("New Board…") { creatingBoard = NewBoard(account: account, workspaceId: w.id) }
                     Divider()
-                    Button("Profile & Settings") { app.route = .profile(account: account.id) }
-                    Button("Closed Boards") { app.route = .closedBoards(account: account.id) }
-                    Button("Open in Browser") { NSWorkspace.shared.open(account.config.server) }
-                    if account.profile?.isAdmin == true {
-                        Button("Admin Panel (Browser)") { NSWorkspace.shared.open(account.client.webURL("/admin")) }
-                        Button("Import from Trello (Browser)") { NSWorkspace.shared.open(account.client.webURL("/import")) }
-                    }
-                    Divider()
-                    Button("Refresh") { Task { await account.refresh() } }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
+                    accountMenu
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
+            }
+        }
+        if !account.guestBoards.isEmpty {
+            SavedSection("\(account.id):guest") {
+                ForEach(account.guestBoards) { b in
+                    BoardRow(board: b, account: account).tag(Route.board(account: account.id, id: b.id))
+                }
+            } header: {
+                header("Guest boards") { accountMenu }
             }
         }
     }
 
-    private func boardRow(_ b: BoardSummary, star: Bool = false) -> some View {
+    /// The section title, with the account's colour and name when there's more than one account, and a menu.
+    private func header<Items: View>(_ title: String, @ViewBuilder menu: () -> Items) -> some View {
+        let items = menu()
+        let several = app.accounts.count > 1
+        return HStack(spacing: 6) {
+            if several { Circle().fill(account.color).frame(width: 8, height: 8) }
+            Text(title).lineLimit(1)
+            if several && title != account.config.label { Text(account.config.label).foregroundStyle(.tertiary).lineLimit(1) }
+            // Next to the title rather than trailing: the collapse chevron only shows on hover and takes the
+            // trailing edge, which pushed a trailing button sideways.
+            Menu { items } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            Spacer()
+        }
+        .contextMenu { items }
+    }
+
+    @ViewBuilder
+    private var accountMenu: some View {
+        Button("New Workspace…") { creatingWorkspace = account }
+        Button("Profile & Settings") { app.route = .profile(account: account.id) }
+        Button("Closed Boards") { app.route = .closedBoards(account: account.id) }
+        Button("Open \(account.config.label) in Browser") { NSWorkspace.shared.open(account.config.server) }
+        if account.profile?.isAdmin == true {
+            Button("Admin Panel (Browser)") { NSWorkspace.shared.open(account.client.webURL("/admin")) }
+            Button("Import from Trello (Browser)") { NSWorkspace.shared.open(account.client.webURL("/import")) }
+        }
+        Divider()
+        Button("Refresh") { Task { await account.refresh() } }
+    }
+}
+
+private struct BoardRow: View {
+    let board: BoardSummary
+    let account: Account
+    var showAccount = false
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
         HStack(spacing: 8) {
-            BoardBackground(background: b.background)
+            BoardBackground(background: board.background)
                 .frame(width: 18, height: 14)
                 .clipShape(RoundedRectangle(cornerRadius: 3))
-            Text(b.name).lineLimit(1)
-            if star { Spacer(); Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow) }
+            Text(board.name).lineLimit(1)
+            if showAccount {
+                Spacer()
+                Circle().fill(account.color).frame(width: 6, height: 6).help(account.config.label)
+            }
         }
-        .tag(Route.board(account: account.id, id: b.id))
         .contextMenu {
-            Button(b.starred == true ? "Unstar" : "Star") {
+            Button(board.starred == true ? "Unstar" : "Star") {
                 app.run(account) {
-                    try await account.api.starBoard(b.id, !(b.starred ?? false))
+                    try await account.api.starBoard(board.id, !(board.starred ?? false))
                     await account.refresh()
                 }
             }
-            Button("Copy Link") { copyToPasteboard(account.client.webURL("/b/\(b.id)").absoluteString) }
-            Button("Open in Browser") { NSWorkspace.shared.open(account.client.webURL("/b/\(b.id)")) }
+            Button("Copy Link") { copyToPasteboard(account.client.webURL("/b/\(board.id)").absoluteString) }
+            Button("Open in Browser") { NSWorkspace.shared.open(account.client.webURL("/b/\(board.id)")) }
         }
     }
 }

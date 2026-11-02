@@ -14,29 +14,30 @@ struct HackbanApp: App {
         WindowGroup("Hackban", id: "main") {
             MainView()
                 .environment(app)
-                .preferredColorScheme(colorScheme)
                 .frame(minWidth: 900, minHeight: 560)
         }
         .commands { HackbanCommands(app: app) }
+        // App-wide rather than .preferredColorScheme: on macOS, going back to nil leaves windows stuck in whatever
+        // was last forced, half light and half dark, instead of following the system.
+        .onChange(of: theme, initial: true) { NSApplication.shared.appearance = appearance }
 
         Settings {
             SettingsView()
                 .environment(app)
-                .preferredColorScheme(colorScheme)
         }
 
         MenuBarExtra(isInserted: $showMenuBar) {
             MenuBarView().environment(app)
         } label: {
-            Image(systemName: app.totalUnread > 0 ? "rectangle.split.3x1.fill" : "rectangle.split.3x1")
+            Image(nsImage: .hackbanMenuBarIcon(unread: app.totalUnread > 0))
         }
         .menuBarExtraStyle(.window)
     }
 
-    private var colorScheme: ColorScheme? {
+    private var appearance: NSAppearance? {
         switch theme {
-        case "light": return .light
-        case "dark": return .dark
+        case "light": return NSAppearance(named: .aqua)
+        case "dark": return NSAppearance(named: .darkAqua)
         default: return nil
         }
     }

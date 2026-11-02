@@ -173,18 +173,21 @@ struct BackgroundPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                ForEach(Palette.boardGradients, id: \.self) { swatch($0) }
-            }
-            HStack(spacing: 6) {
-                ForEach(Palette.boardColors, id: \.self) { swatch($0) }
-            }
+            grid(Palette.boardGradients)
+            grid(Palette.boardColors)
+        }
+    }
+
+    /// Six to a row, sized to the space given: a row of nine colours overflowed the board inspector.
+    private func grid(_ backgrounds: [String]) -> some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 6), spacing: 6) {
+            ForEach(backgrounds, id: \.self) { swatch($0) }
         }
     }
 
     private func swatch(_ bg: String) -> some View {
         BoardBackground(background: bg)
-            .frame(width: 40, height: 28)
+            .frame(height: 28)
             .clipShape(RoundedRectangle(cornerRadius: 4))
             .overlay { if selection == bg { Image(systemName: "checkmark").font(.caption.bold()).foregroundStyle(.white) } }
             .onTapGesture { selection = bg }

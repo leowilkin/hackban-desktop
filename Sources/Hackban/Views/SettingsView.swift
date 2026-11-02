@@ -202,6 +202,8 @@ struct MenuBarView: View {
             }
             .buttonStyle(.plain)
             Button("Open Hackban") { show() }.buttonStyle(.plain)
+            Divider()
+            Button("Quit Hackban") { NSApp.terminate(nil) }.buttonStyle(.plain)
         }
         .padding(14)
         .frame(width: 320)
@@ -211,7 +213,15 @@ struct MenuBarView: View {
     }
 
     private func show() {
-        NSApp.activate(ignoringOtherApps: true)
-        if !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) { openWindow(id: "main") }
+        NSApp.activate()
+        // Since macOS 14 activating is only a request, and the menu bar panel doesn't make us the active app, so
+        // bring the window up ourselves too. Taking key also closes the panel.
+        if let window = NSApp.windows.first(where: { $0.canBecomeMain && ($0.isVisible || $0.isMiniaturized) }) {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+        } else {
+            openWindow(id: "main")
+        }
     }
 }

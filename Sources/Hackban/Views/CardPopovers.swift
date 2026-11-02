@@ -80,7 +80,16 @@ struct CardSidebar: View {
     }
 
     private func button(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Label(title, systemImage: icon).frame(maxWidth: .infinity, alignment: .leading) }
+        Button(action: action) {
+            Label(title, systemImage: icon).labelStyle(IconColumnLabelStyle()).frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// Puts the icon in a fixed-width column, so the titles line up down a stack of buttons whatever each symbol's width.
+private struct IconColumnLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 6) { configuration.icon.frame(width: 18); configuration.title }
     }
 }
 

@@ -28,6 +28,7 @@ struct CardSheet: View {
             }
         }
         .frame(minWidth: 780, idealWidth: 860, minHeight: 560, idealHeight: 760)
+        .background(DismissOnOutsideClick { dismiss() })
         .task { await model.load() }
         .onDisappear { if model.boardModel?.openCard === model { model.boardModel?.openCard = nil } }
         .confirm($confirm)
@@ -40,7 +41,6 @@ struct CardSheet: View {
         VStack(spacing: 0) {
             CardCover(card: card, account: model.account)
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "rectangle.portrait").foregroundStyle(.secondary).padding(.top, 6)
                 VStack(alignment: .leading, spacing: 2) {
                     if canEdit {
                         InlineEditor(value: card.title, font: .title2.bold(), axis: .vertical) { model.update(.init(title: $0)) }

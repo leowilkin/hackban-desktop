@@ -54,7 +54,7 @@ them for site admins.
 ## Requirements
 
 - macOS 14 Sonoma or later.
-- Xcode 16 (Swift 6 toolchain) to build.
+- Xcode 16 (Swift 6 toolchain) to build. Xcode 26 or later for the Liquid Glass design on macOS 26 and later.
 - A Hackban server with native app sign-in (`scopes_supported` includes `"app"` in
   `/.well-known/oauth-authorization-server`). See [Server support](#server-support).
 
@@ -67,8 +67,9 @@ UNIVERSAL=1 ./Scripts/bundle.sh
 ./Scripts/icon.sh          # regenerate Resources/AppIcon.icns from AppIcon.svg (needs librsvg)
 ```
 
-Or open `Package.swift` in Xcode and run the `Hackban` scheme. Notifications and open-at-login need the
-bundled app (`Scripts/bundle.sh`), not `swift run`. The app is ad-hoc signed, so the first launch needs
+Or open `Package.swift` in Xcode and run the `Hackban` scheme. Notifications, open-at-login and Liquid Glass
+need the bundled app (`Scripts/bundle.sh`), not `swift run`: plain `swift build` records the deployment target
+as the SDK version, so macOS shows the pre-26 design. The app is ad-hoc signed, so the first launch needs
 right-click → Open, and macOS may ask once per build to let it read its Keychain item.
 
 CI (`.github/workflows/build.yml`) runs the tests and builds `Hackban.app` on macOS for every push, and
