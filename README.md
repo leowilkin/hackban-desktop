@@ -132,13 +132,9 @@ To make the certificate (once, on your own machine):
    Self-Signed Root, Certificate Type Code Signing. Tick "Let me override defaults" and give it a long validity
    period (say 7300 days), since signatures from an expired certificate stop checking out.
 2. In Keychain Access → My Certificates, right-click `Hackban Release` → Export… and save a .p12 with a password.
-3. Add both as secrets and delete the file:
-
-   ```sh
-   base64 -i ~/HackbanRelease.p12 | gh secret set HACKBAN_SIGNING_P12
-   gh secret set HACKBAN_SIGNING_P12_PASSWORD
-   rm ~/HackbanRelease.p12
-   ```
+3. Run `./Scripts/signing-secrets.sh ~/HackbanRelease.p12`. It asks for the export password, checks it opens the
+   file, sets `HACKBAN_SIGNING_P12` and `HACKBAN_SIGNING_P12_PASSWORD`, and deletes the file. (Pasting into
+   `gh secret set`'s own prompt can mangle the password.)
 
 `Scripts/bundle.sh` signs with `Hackban Release` whenever it's in your keychains (or with `SIGN_IDENTITY`), so
 local builds match releases and switching between them doesn't ask either. Keep the certificate and its key in a

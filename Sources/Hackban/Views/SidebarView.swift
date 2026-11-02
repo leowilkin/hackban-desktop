@@ -18,13 +18,28 @@ struct SidebarView: View {
 
     var body: some View {
         @Bindable var app = app
+        // Everything is a list row with a Label, so the system's sidebar layout sets one icon column and one text
+        // column for all of it rather than each part padding itself.
         List(selection: $app.route) {
             Section {
+                switcher
+            }
+
+            Section {
+                Button { QuickAddController.shared.show() } label: {
+                    Label {
+                        Text("Add card").fontWeight(.medium).foregroundStyle(Color.hackClubRed)
+                    } icon: {
+                        Image(systemName: "plus.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, Color.hackClubRed)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Quick add a card (\(HotKeyCenter.shared.shortcut?.display ?? "⌃⌥Space"))")
                 Button { SearchController.shared.show() } label: { navRow("Search", "magnifyingglass") }
                     .buttonStyle(.plain)
                     .help("Search boards and cards (⌘K)")
                 navRow("Home", "house").tag(Route.home)
-                navRow("My Cards", "person.crop.rectangle.stack")
+                navRow("My Cards", "person.crop.circle")
                     .badge(app.visibleAccounts.reduce(0) { n, a in n + a.myCards.filter { !$0.dueComplete }.count })
                     .tag(Route.myCards)
                 navRow("Notifications", "tray")
@@ -50,49 +65,32 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 0) { header }
         .safeAreaInset(edge: .bottom, spacing: 0) { syncStatus }
         .sheet(item: $creatingBoard) { n in CreateBoardView(account: n.account, workspaceId: n.workspaceId).environment(app) }
         .sheet(item: $creatingWorkspace) { a in CreateWorkspaceView(account: a).environment(app) }
     }
 
-    /// The top of the sidebar, after Todoist's: the app's switcher menu, then a red Add card.
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Menu {
-                Button("Add Server…") { app.addingAccount = true }
-                Button("Join Board from Link…") { JoinLinkPanel.present(app: app) }
-                Divider()
-                SettingsLink { Text("Settings…") }
-            } label: {
-                HStack(spacing: 7) {
-                    HackbanMark(size: 20)
+    /// The app's menu at the top of the sidebar, after Todoist's account switcher.
+    private var switcher: some View {
+        Menu {
+            Button("Add Server…") { app.addingAccount = true }
+            Button("Join Board from Link…") { JoinLinkPanel.present(app: app) }
+            Divider()
+            SettingsLink { Text("Settings…") }
+        } label: {
+            Label {
+                HStack(spacing: 5) {
                     Text("Hackban").fontWeight(.semibold)
                     Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                 }
-                .contentShape(Rectangle())
+            } icon: {
+                HackbanMark(size: 16)
             }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            Button { QuickAddController.shared.show() } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.title2)
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, Color.hackClubRed)
-                    Text("Add card").fontWeight(.semibold).foregroundStyle(Color.hackClubRed)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Quick add a card (\(HotKeyCenter.shared.shortcut?.display ?? "⌃⌥Space"))")
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.top, 6)
-        .padding(.bottom, 10)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
     }
 
     /// How each server's sync is going, only while there's something to say (offline, waiting, failed).
@@ -182,24 +180,7 @@ private struct AccountSections: View {
 
     /// The section title, with the account's colour and name when there's more than one account, and a menu.
     private func header<Items: View>(_ title: String, @ViewBuilder menu: () -> Items) -> some View {
-        let items = menu()
-        let several = app.accounts.count > 1
-        return HStack(spacing: 6) {
-            if several { Circle().fill(account.color).frame(width: 8, height: 8) }
-            Text(title).lineLimit(1)
-            if several && title != account.config.label { Text(account.config.label).foregroundStyle(.tertiary).lineLimit(1) }
-            if account.sync.isOffline { Image(systemName: "icloud.slash").foregroundStyle(.secondary).help("Offline: can't reach \(account.host)") }
-            // Next to the title rather than trailing: the collapse chevron only shows on hover and takes the
-            // trailing edge, which pushed a trailing button sideways.
-            Menu { items } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            Spacer()
-        }
-        .contextMenu { items }
+        SectionHeader(account: account, title: title, menu: menu())
     }
 
     @ViewBuilder
@@ -217,6 +198,38 @@ private struct AccountSections: View {
     }
 }
 
+/// A section heading. Its menu only shows while you hover the heading, so at rest the sidebar is just names; it sits
+/// right after the title rather than trailing, where the collapse chevron appears on hover and would push it about.
+private struct SectionHeader<Items: View>: View {
+    let account: Account
+    let title: String
+    let menu: Items
+    @Environment(AppModel.self) private var app
+    @State private var hovering = false
+
+    var body: some View {
+        let several = app.accounts.count > 1
+        HStack(spacing: 6) {
+            if several { Circle().fill(account.color).frame(width: 6, height: 6) }
+            Text(title).lineLimit(1)
+            if several && title != account.config.label { Text(account.config.label).foregroundStyle(.tertiary).lineLimit(1) }
+            if account.sync.isOffline { Image(systemName: "icloud.slash").foregroundStyle(.secondary).help("Offline: can't reach \(account.host)") }
+            Menu { menu } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .opacity(hovering ? 1 : 0)
+            .help("\(title) actions")
+            Spacer()
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .contextMenu { menu }
+    }
+}
+
 private struct BoardRow: View {
     let board: BoardSummary
     let account: Account
@@ -224,11 +237,15 @@ private struct BoardRow: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
-        HStack(spacing: 8) {
-            BoardBackground(background: board.background)
-                .frame(width: 18, height: 14)
-                .clipShape(RoundedRectangle(cornerRadius: 3))
-            Text(board.name).lineLimit(1)
+        HStack {
+            // A colour swatch in the icon column, like Todoist's project dots, so names line up with the rows above.
+            Label {
+                Text(board.name).lineLimit(1)
+            } icon: {
+                BoardBackground(background: board.background)
+                    .frame(width: 14, height: 14)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
             if showAccount {
                 Spacer()
                 Circle().fill(account.color).frame(width: 6, height: 6).help(account.config.label)
