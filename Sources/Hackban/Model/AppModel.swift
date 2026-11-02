@@ -97,6 +97,7 @@ final class AppModel {
     private func installSignIn(_ a: Account, _ creds: AccountCredentials) async {
         a.beginSignIn()
         await a.tokens.set(creds)
+        a.sync.tokensInstalled()
         a.signedOut = false
         a.lastError = nil
         await a.refresh()

@@ -40,6 +40,9 @@ final class SyncEngine {
     /// Changes synced in the last couple of minutes, re-applied to a fetch that started before they landed.
     @ObservationIgnored private var recent: [(change: Change, boardId: String, at: Date)] = []
     @ObservationIgnored private var probeTask: Task<Void, Never>?
+    /// When the tokens last changed (a sign-in started or its tokens went in). Fetches that set off before
+    /// then used the old tokens, so what they bring back is dropped.
+    @ObservationIgnored private var tokensChangedAt: Date?
     /// Draining after coming back online (or at launch), so failures are summed up in one toast at the end.
     @ObservationIgnored private var catchingUp = false
     /// Refetching boards before catching up: nothing is sent until conflict checks can see the latest.
@@ -77,12 +80,17 @@ final class SyncEngine {
         }
         store.prune("boards", keep: Self.maxBoards, except: queue.boardIds)
         store.prune("cards", keep: Self.maxCards, except: Set(queue.pending.compactMap(\.change.cardId)))
+        // A sign-in that was never confirmed before the app quit stays unconfirmed.
+        if store.isSigningIn { identity.resumeSignIn() }
         for id in queue.boardIds { loadCachedBoard(id) }
         recompute()
     }
 
-    var pendingCount: Int { queue.pending.count }
-    var hasFailures: Bool { !queue.failed.isEmpty }
+    /// The queue as it may be shown: nothing while a new sign-in is unconfirmed (it may be someone else's).
+    var visiblePending: [PendingOp] { identity.showsCache ? queue.pending : [] }
+    var visibleFailed: [FailedOp] { identity.showsCache ? queue.failed : [] }
+    var pendingCount: Int { visiblePending.count }
+    var hasFailures: Bool { !visibleFailed.isEmpty }
     /// Worth showing a sync status for.
     var hasStatus: Bool { isOffline || !queue.isEmpty || queueSetAside != nil || !identity.showsCache }
 
@@ -105,6 +113,7 @@ final class SyncEngine {
 
     /// A fresh `board.get`. Changes that synced after the fetch set off are put back on top.
     func store(board: Board, fetchStarted: Date) {
+        if let t = tokensChangedAt, fetchStarted < t { return }
         var b = board
         for r in recent where r.boardId == board.id && r.at >= fetchStarted { r.change.apply(to: &b) }
         boardSnapshots[b.id] = b
@@ -114,6 +123,7 @@ final class SyncEngine {
     }
 
     func store(card: Card, fetchStarted: Date) {
+        if let t = tokensChangedAt, fetchStarted < t { return }
         var c = card
         for r in recent where r.change.cardId == card.id && r.at >= fetchStarted { r.change.apply(to: &c) }
         cardSnapshots[c.id] = c
@@ -259,6 +269,7 @@ final class SyncEngine {
     }
 
     func retry(_ failedId: String, useMine: Bool = false) {
+        guard identity.showsCache else { return }
         queue.retry(failedId, useMine: useMine)
         saveQueue()
         recompute()
@@ -266,6 +277,7 @@ final class SyncEngine {
     }
 
     func discard(_ failedId: String) {
+        guard identity.showsCache else { return }
         queue.discard(failedId)
         saveQueue()
         recompute()
@@ -378,15 +390,32 @@ final class SyncEngine {
     func setCacheOwner(_ userId: String?) { identity.cacheOwner = userId }
 
     /// New tokens are about to be installed: hide what's kept and send nothing until they're confirmed.
-    func beginSignIn() {
+    /// Returns false if that couldn't be noted on disk, in which case the caller forgets what's kept rather
+    /// than risk showing it after a relaunch.
+    func beginSignIn() -> Bool {
         identity.beginSignIn()
+        tokensChangedAt = Date()
         recompute()
+        do {
+            try store.markSigningIn()
+            return true
+        } catch {
+            return false
+        }
     }
 
-    /// A profile fetched with the current tokens says who this is. The caller forgets what's kept if it
-    /// was someone else's, then lets the queue go.
-    func confirm(_ userId: String) -> IdentityGate.Confirmed {
-        let result = identity.confirm(userId)
+    /// The new tokens are in: anything fetched before now used the old ones.
+    func tokensInstalled() {
+        identity.tokensInstalled()
+        tokensChangedAt = Date()
+    }
+
+    /// A profile says who this is. `generation`: `identity.generation` when that fetch set off; if the tokens
+    /// changed since, it confirms nothing (nil). The caller forgets what's kept if it was someone else's, then
+    /// lets the queue go.
+    func confirm(_ userId: String, generation: Int) -> IdentityGate.Confirmed? {
+        guard let result = identity.confirm(userId, generation: generation) else { return nil }
+        store.clearSigningIn()
         recompute()
         return result
     }
@@ -394,6 +423,8 @@ final class SyncEngine {
     /// Signed out on purpose.
     func forgetIdentity() {
         identity.reset()
+        tokensChangedAt = Date()
+        store.clearSigningIn()
         recompute()
     }
 
@@ -457,9 +488,10 @@ final class SyncEngine {
                 if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
                 guard let self, self.isOffline, !Task.isCancelled else { return }
                 do {
-                    // Reachable again, and this confirms who the tokens belong to.
+                    // Reachable again, and this confirms who the tokens belong to (if they haven't changed meanwhile).
+                    let generation = self.identity.generation
                     let profile = try await self.api.profile()
-                    self.account?.confirmIdentity(profile.id)
+                    self.account?.confirmIdentity(profile.id, generation: generation)
                     self.cameOnline()
                     return
                 } catch {

@@ -13,6 +13,9 @@ public struct IdentityGate: Equatable, Sendable {
     public var cacheOwner: String?
     /// New tokens are in and haven't been confirmed yet.
     public private(set) var signingIn = false
+    /// Goes up whenever the tokens change (a sign-in starts, its tokens go in, a sign-out). A profile fetched
+    /// under an older generation says nothing about the current tokens and is ignored.
+    public private(set) var generation = 0
 
     public init(cacheOwner: String? = nil) {
         self.cacheOwner = cacheOwner
@@ -43,6 +46,18 @@ public struct IdentityGate: Equatable, Sendable {
     public mutating func beginSignIn() {
         verified = nil
         signingIn = true
+        generation += 1
+    }
+
+    /// The new tokens are in. Anything fetched before now used the old ones.
+    public mutating func tokensInstalled() {
+        generation += 1
+    }
+
+    /// After a relaunch, a sign-in that was never confirmed is still unconfirmed.
+    public mutating func resumeSignIn() {
+        verified = nil
+        signingIn = true
     }
 
     public enum Confirmed: Equatable, Sendable {
@@ -51,9 +66,11 @@ public struct IdentityGate: Equatable, Sendable {
         case someoneElse
     }
 
-    /// A profile fetched with the current tokens says who this is.
+    /// A profile says who this is. `generation`: the gate's generation when that fetch started. If the
+    /// tokens have changed since, it's ignored (nil).
     @discardableResult
-    public mutating func confirm(_ userId: String) -> Confirmed {
+    public mutating func confirm(_ userId: String, generation fetched: Int) -> Confirmed? {
+        guard fetched == generation else { return nil }
         let owner = cacheOwner ?? verified
         // After a new sign-in, data of unknown ownership is treated as someone else's.
         let result: Confirmed = owner == userId || (owner == nil && !signingIn) ? .same : .someoneElse
@@ -68,5 +85,6 @@ public struct IdentityGate: Equatable, Sendable {
         verified = nil
         cacheOwner = nil
         signingIn = false
+        generation += 1
     }
 }

@@ -13,7 +13,7 @@ struct SyncSummary {
     init(_ account: Account) {
         let sync = account.sync
         let pending = sync.pendingCount
-        let failed = sync.queue.failed.count
+        let failed = sync.visibleFailed.count
         let changes = pending == 1 ? "1 change" : "\(pending) changes"
         if !sync.identity.showsCache {
             title = "Checking who's signed in…"
@@ -142,9 +142,9 @@ struct SyncPanel: View {
                 }
             }
 
-            let conflicts = sync.queue.failed.filter(\.isConflict)
-            let failures = sync.queue.failed.filter { !$0.isConflict }
-            if !sync.queue.pending.isEmpty || !sync.queue.failed.isEmpty {
+            let conflicts = sync.visibleFailed.filter(\.isConflict)
+            let failures = sync.visibleFailed.filter { !$0.isConflict }
+            if !sync.visiblePending.isEmpty || !sync.visibleFailed.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         if !conflicts.isEmpty {
@@ -157,9 +157,9 @@ struct SyncPanel: View {
                                 ForEach(failures) { f in FailureRow(sync: sync, failed: f) }
                             }
                         }
-                        if !sync.queue.pending.isEmpty {
+                        if !sync.visiblePending.isEmpty {
                             section("Waiting to sync") {
-                                ForEach(sync.queue.pending) { op in
+                                ForEach(sync.visiblePending) { op in
                                     Label(sync.describe(op), systemImage: op.id == sync.queue.sending ? "arrow.up.circle" : "clock")
                                         .font(.callout)
                                         .lineLimit(2)

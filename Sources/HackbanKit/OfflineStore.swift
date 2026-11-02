@@ -127,6 +127,16 @@ public final class OfflineStore: @unchecked Sendable {
         return io.sync { (try? FileManager.default.moveItem(at: from, to: to)) != nil ? to : nil }
     }
 
+    // A sign-in whose new tokens haven't been confirmed yet is noted on disk before they're saved, so a
+    // relaunch keeps everything hidden until they are.
+
+    static let signingInFile = "signing-in.json"
+
+    /// Notes an unconfirmed sign-in. Throws if it couldn't be written (so the caller can fail closed).
+    public func markSigningIn() throws { try write(true, Self.signingInFile) }
+    public var isSigningIn: Bool { exists(Self.signingInFile) }
+    public func clearSigningIn() { remove(Self.signingInFile) }
+
     /// Deletes all but the `keep` most recently written files in `folder`, never touching `except`.
     public func prune(_ folder: String, keep: Int, except: Set<String> = []) {
         io.sync {
