@@ -14,10 +14,39 @@ struct ListColumn: View {
     @State private var copyName = ""
     @State private var confirm: ConfirmAction?
     @FocusState private var composerFocused: Bool
+    /// Folded down to a narrow strip, as on the web. Kept on this Mac only; the server has no such setting.
+    @AppStorage private var collapsed: Bool
+
+    init(model: BoardModel, list: BoardList, hoveredCard: Binding<String?>) {
+        self.model = model
+        self.list = list
+        _hoveredCard = hoveredCard
+        _collapsed = AppStorage(wrappedValue: false, "hackban:list-collapsed:\(list.id)")
+    }
 
     var body: some View {
+        Group {
+            if collapsed { strip } else { column }
+        }
+        .background(listBackground, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(dropTarget ? Color.accentColor : Color.white.opacity(0.08), lineWidth: dropTarget ? 2 : 1))
+        // Dropping on the list (not on a card) puts the card at the end.
+        .dropDestination(for: String.self) { items, _ in
+            guard let s = items.first, let cid = DragItem.cardId(s) else { return false }
+            model.moveCard(cid, to: list.id, before: nil)
+            return true
+        } isTargeted: { dropTarget = $0 }
+        .confirm($confirm)
+        .alert("Copy list", isPresented: $copying) {
+            TextField("Name", text: $copyName)
+            Button("Copy") { if !copyName.isEmpty { model.copyList(list.id, name: copyName) } }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private var column: some View {
         let cards = model.visibleCards(in: list)
-        VStack(alignment: .leading, spacing: 0) {
+        return VStack(alignment: .leading, spacing: 0) {
             header
             // Short lists hug their cards; long ones scroll.
             ViewThatFits(in: .vertical) {
@@ -37,20 +66,30 @@ struct ListColumn: View {
             }
         }
         .frame(width: 272)
-        .background(listBackground, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(dropTarget ? Color.accentColor : Color.white.opacity(0.08), lineWidth: dropTarget ? 2 : 1))
-        // Dropping on the list (not on a card) puts the card at the end.
-        .dropDestination(for: String.self) { items, _ in
-            guard let s = items.first, let cid = DragItem.cardId(s) else { return false }
-            model.moveCard(cid, to: list.id, before: nil)
-            return true
-        } isTargeted: { dropTarget = $0 }
-        .confirm($confirm)
-        .alert("Copy list", isPresented: $copying) {
-            TextField("Name", text: $copyName)
-            Button("Copy") { if !copyName.isEmpty { model.copyList(list.id, name: copyName) } }
-            Button("Cancel", role: .cancel) {}
+    }
+
+    /// A collapsed list: its name and count running down a narrow strip. Click to open it again; cards dropped on
+    /// it still go to the end.
+    private var strip: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "arrow.left.and.line.vertical.and.arrow.right").font(.caption).foregroundStyle(.secondary)
+            Sideways {
+                HStack(spacing: 8) {
+                    Text(list.name).font(.headline).lineLimit(1)
+                    Text("\(model.visibleCards(in: list).count)").font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                }
+                .fixedSize()
+                .rotationEffect(.degrees(90))
+            }
         }
+        .padding(.vertical, 12)
+        .frame(width: 44)
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .onTapGesture { collapsed = false }
+        .draggable(DragItem.list(list.id)) { Text(list.name).padding(8).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8)) }
+        .help("Expand \(list.name)")
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
     }
 
     private func cardStack(_ cards: [Card]) -> some View {
@@ -94,6 +133,10 @@ struct ListColumn: View {
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
+            Button { collapsed = true } label: { Image(systemName: "arrow.right.and.line.vertical.and.arrow.left") }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Collapse list")
             if model.canEdit {
                 Menu { listMenu } label: { Image(systemName: "ellipsis") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
@@ -370,6 +413,20 @@ struct QuickEditPopover: View {
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !t.isEmpty, t != card.title { model.updateCard(card.id, .init(title: t)) }
         dismiss()
+    }
+}
+
+/// Sizes its one subview as if turned a quarter, so text rotated with `rotationEffect` takes up the space it
+/// appears to (rotation alone doesn't change layout).
+struct Sideways: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let s = subviews.first?.sizeThatFits(.unspecified) ?? .zero
+        return CGSize(width: s.height, height: s.width)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let v = subviews.first else { return }
+        v.place(at: CGPoint(x: bounds.midX, y: bounds.midY), anchor: .center, proposal: ProposedViewSize(v.sizeThatFits(.unspecified)))
     }
 }
 
