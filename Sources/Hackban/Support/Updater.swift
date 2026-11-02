@@ -26,6 +26,8 @@ final class Updater {
     /// This build's number (`CFBundleVersion`); 0 for a local build.
     let build = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") ?? 0
     private let repo = Bundle.main.object(forInfoDictionaryKey: "HackbanUpdateRepo") as? String
+    /// The Ed25519 key (base64) that releases are signed with in CI. Releases that aren't signed with it are refused.
+    private let publicKey = Bundle.main.object(forInfoDictionaryKey: "HackbanUpdatePublicKey") as? String
 
     var versionDescription: String { build > 0 ? "\(version) (build \(build))" : "\(version) (local build)" }
 
@@ -98,8 +100,8 @@ final class Updater {
         }
     }
 
-    /// Downloads the release, checks it's this app at that build and intact, swaps it in for the running copy and
-    /// relaunches.
+    /// Downloads the release, checks it's signed with the update key and is this app at that build and intact, swaps
+    /// it in for the running copy and relaunches.
     func install(_ release: AppRelease) async {
         guard !busy, let n = release.build, let asset = release.archive, let id = Bundle.main.bundleIdentifier else { return }
         let app = Bundle.main.bundleURL
@@ -112,7 +114,8 @@ final class Updater {
         defer { busy = false }
         AppModel.shared.flash("Downloading build \(n)…")
         do {
-            try await AppInstaller.install(from: asset.url, build: n, bundleIdentifier: id, replacing: app)
+            try await AppInstaller.install(from: asset.url, signature: release.signature?.url, publicKey: publicKey, build: n,
+                                           bundleIdentifier: id, replacing: app)
             try relaunch(app)
         } catch {
             inform("Couldn't install build \(n).", error.localizedDescription)

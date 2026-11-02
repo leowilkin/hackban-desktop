@@ -2,9 +2,13 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+#if os(macOS)
+import CryptoKit
+#endif
 
 /// A build of the app on GitHub. CI publishes every build of `main` as a release tagged `build-<run number>`,
-/// with the app zipped up as `Hackban.zip`; the run number is also the app's `CFBundleVersion`.
+/// with the app zipped up as `Hackban.zip` and that zip's Ed25519 signature as `Hackban.zip.sig`; the run number is
+/// also the app's `CFBundleVersion`.
 public struct AppRelease: Decodable, Sendable, Equatable {
     public struct Asset: Decodable, Sendable, Equatable {
         public let name: String
@@ -31,6 +35,7 @@ public struct AppRelease: Decodable, Sendable, Equatable {
     }
 
     public static let archiveName = "Hackban.zip"
+    public static let signatureName = archiveName + ".sig"
 
     /// N from a `build-N` tag; nil for any other tag.
     public var build: Int? {
@@ -40,6 +45,9 @@ public struct AppRelease: Decodable, Sendable, Equatable {
 
     /// The zipped app.
     public var archive: Asset? { assets.first { $0.name == Self.archiveName } }
+
+    /// The archive's signature: 64 raw bytes of Ed25519 over the zip, made in CI with the update key.
+    public var signature: Asset? { assets.first { $0.name == Self.signatureName } }
 
     /// A later build than `build`, with an app to install.
     public func isNewer(than build: Int) -> Bool {
@@ -81,10 +89,29 @@ public enum AppInstaller {
         init(_ message: String) { errorDescription = message }
     }
 
-    /// Downloads the zipped app at `archive`, checks the app inside is `bundleIdentifier` at `build` with an intact
-    /// code signature, and swaps it in for `app`. Nothing changes if any step fails.
-    public static func install(from archive: URL, build: Int, bundleIdentifier: String, replacing app: URL,
-                               session: URLSession = .shared) async throws {
+    /// Downloads the zipped app at `archive`, checks the zip is signed by `publicKey` (base64 of a raw Ed25519 key)
+    /// with the signature at `signature`, that the app inside is `bundleIdentifier` at `build` with an intact code
+    /// signature, and swaps it in for `app`. Nothing changes if any step fails.
+    ///
+    /// The app is ad-hoc signed, so its code signature only shows it arrived intact, not who built it; the zip's
+    /// signature is what ties it to CI. Without a `publicKey` (a build with no `HackbanUpdatePublicKey`) the zip isn't
+    /// checked.
+    public static func install(from archive: URL, signature: URL?, publicKey: String?, build: Int, bundleIdentifier: String,
+                               replacing app: URL, session: URLSession = .shared) async throws {
+        // Before the app download, so an unsigned release fails straight away.
+        var signed: (key: Curve25519.Signing.PublicKey, signature: Data)?
+        if let publicKey {
+            guard let raw = Data(base64Encoded: publicKey), let key = try? Curve25519.Signing.PublicKey(rawRepresentation: raw) else {
+                throw Failure("This build's update key (HackbanUpdatePublicKey) isn't valid.")
+            }
+            guard let signature else { throw Failure("The download isn't signed.") }
+            let (data, response) = try await session.data(from: signature)
+            if let status = (response as? HTTPURLResponse)?.statusCode, status != 200 {
+                throw Failure("The signature download failed (\(status)).")
+            }
+            signed = (key, data)
+        }
+
         let fm = FileManager.default
         // On the app's volume, so the swap is a rename.
         let dir = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: app, create: true)
@@ -96,6 +123,9 @@ public enum AppInstaller {
         }
         let zip = dir.appendingPathComponent(archive.lastPathComponent)
         try fm.moveItem(at: download, to: zip)
+        if let signed, !signed.key.isValidSignature(signed.signature, for: try Data(contentsOf: zip, options: .mappedIfSafe)) {
+            throw Failure("The download isn't signed with Hackban's update key.")
+        }
         do { try await run("/usr/bin/ditto", ["-x", "-k", zip.path, dir.path]) } catch {
             throw Failure("The download isn't a zipped app.")
         }
