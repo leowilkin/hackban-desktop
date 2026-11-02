@@ -178,7 +178,7 @@ final class OfflineQueueTests: XCTestCase {
         q.enqueue(op(.updateCard(id: "c1", patch: .init(coverAttachmentId: .some("a1")), base: .init(coverAttachmentId: .some(nil)))))
         guard case .updateCard(_, let p, _) = q.pending[0].change else { return XCTFail() }
         XCTAssertEqual(p.coverAttachmentId, .some("a1"))
-        XCTAssertNil(p.coverColor)
+        XCTAssertTrue(p.coverColor == nil, "the colour is dropped, not cleared")
     }
 
     func testTogglesThatCancelOutDisappear() {
